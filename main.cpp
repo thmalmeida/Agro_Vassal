@@ -1055,12 +1055,12 @@ void comm_SIM900()
 		pf = strchr(sInstrSIM900,';');
 
 		uint8_t l=0;
-		l = pf - pi;
+		l = pf - pi + 1;
 
 		int i;
-		for(i=1;i<=l;i++)
+		for(i=0;i<l;i++)
 		{
-			sInstr[i+1] = pi[i];
+			sInstr[i] = pi[i+1];
 		}
 
 		enableDecode = 1;
@@ -1237,9 +1237,22 @@ void handleMessage()
 	{
 		enableDecode = 0;
 
+		int i;
+		for(i=0;i<rLength;i++)
+		{
+			Serial1.println(sInstr[i]);
+		}
+
+		for(i=0;i<rLength;i++)
+		{
+			Serial1.println(sInstr[i],HEX);
+		}
+
+
+
 		// Getting the opcode
 		aux[0] = '0';
-		aux[1] = sInstr[2];
+		aux[1] = sInstr[0];
 		aux[2] = '\0';
 		opcode = (uint8_t) atoi(aux);
 //		Serial1.println("Got!");
@@ -1255,18 +1268,18 @@ void handleMessage()
 			case 1:		// Set-up clock
 
 				// Getting the parameters
-				aux[0] = sInstr[3];
-				aux[1] = sInstr[4];
+				aux[0] = sInstr[1];
+				aux[1] = sInstr[2];
 				aux[2] = '\0';
 				tm.Hour = (uint8_t) atoi(aux);
 
-				aux[0] = sInstr[5];
-				aux[1] = sInstr[6];
+				aux[0] = sInstr[3];
+				aux[1] = sInstr[4];
 				aux[2] = '\0';
 				tm.Minute = (uint8_t) atoi(aux);
 
-				aux[0] = sInstr[7];
-				aux[1] = sInstr[8];
+				aux[0] = sInstr[5];
+				aux[1] = sInstr[6];
 				aux[2] = '\0';
 				tm.Second = (uint8_t) atoi(aux);
 
@@ -1279,21 +1292,21 @@ void handleMessage()
 			case 2:		// Set-up date
 
 				// Getting the parameters
-				aux[0] = sInstr[3];
-				aux[1] = sInstr[4];
+				aux[0] = sInstr[1];
+				aux[1] = sInstr[2];
 				aux[2] = '\0';
 				tm.Day = (uint8_t) atoi(aux);
 
-				aux[0] = sInstr[5];
-				aux[1] = sInstr[6];
+				aux[0] = sInstr[3];
+				aux[1] = sInstr[4];
 				aux[2] = '\0';
 				tm.Month = (uint8_t) atoi(aux);
 
 				char aux2[5];
-				aux2[0] = sInstr[7];
-				aux2[1] = sInstr[8];
-				aux2[2] = sInstr[9];
-				aux2[3] = sInstr[10];
+				aux2[0] = sInstr[5];
+				aux2[1] = sInstr[6];
+				aux2[2] = sInstr[7];
+				aux2[3] = sInstr[8];
 				aux2[4] = '\0';
 				tm.Year = (uint8_t) (atoi(aux2)-1970);
 
@@ -1307,7 +1320,7 @@ void handleMessage()
 
 				uint8_t motorCommand;
 				aux[0] = '0';
-				aux[1] = sInstr[3];
+				aux[1] = sInstr[1];
 				aux[2] = '\0';
 				motorCommand = (uint8_t) atoi(aux);
 
@@ -1321,18 +1334,18 @@ void handleMessage()
 				break;
 
 			case 4:	// ON OFF sectors
-				if(sInstr[3] == 's')
+				if(sInstr[1] == 's')
 				{
-					aux[0] = sInstr[4];
-					aux[1] = sInstr[5];
+					aux[0] = sInstr[2];
+					aux[1] = sInstr[3];
 					aux[2] = '\0';
 					sector = (uint8_t) atoi(aux);
 
 
 					uint8_t sectorCommand;
-					// sInstr[6] == :
+					// sInstr[4] == :
 					aux[0] = '0';
-					aux[1] = sInstr[7];
+					aux[1] = sInstr[5];
 					aux[2] = '\0';
 					sectorCommand = (uint8_t) atoi(aux);
 
@@ -1346,17 +1359,17 @@ void handleMessage()
 
 			case 5:
 //				5t01:23;
-				if(sInstr[3] == 't')
+				if(sInstr[1] == 't')
 				{
-					aux[0] = sInstr[4];
-					aux[1] = sInstr[5];
+					aux[0] = sInstr[2];
+					aux[1] = sInstr[3];
 					aux[2] = '\0';
 					sector = (uint8_t) atoi(aux);
 
-
+					// sInstr[4] == :
 					uint8_t sectorTimeChange;
-					aux[0] = sInstr[7];
-					aux[1] = sInstr[8];
+					aux[0] = sInstr[5];
+					aux[1] = sInstr[6];
 					aux[2] = '\0';
 					sectorTimeChange = (uint8_t) atoi(aux);
 
@@ -1380,7 +1393,7 @@ void handleMessage()
 			case 6:
 				uint8_t setCommand;
 				aux[0] = '0';
-				aux[1] = sInstr[3];
+				aux[1] = sInstr[1];
 				aux[2] = '\0';
 				setCommand = (uint8_t) atoi(aux);
 
@@ -1405,10 +1418,10 @@ void handleMessage()
 
 					case 3:
 	//				63:s01;
-					if((sInstr[4] == ':')&&(sInstr[5] == 's'))
+					if((sInstr[2] == ':')&&(sInstr[3] == 's'))
 					{
-						aux[0] = sInstr[6];
-						aux[1] = sInstr[7];
+						aux[0] = sInstr[4];
+						aux[1] = sInstr[5];
 						aux[2] = '\0';
 						valveOnTest = (uint8_t) atoi(aux);
 
