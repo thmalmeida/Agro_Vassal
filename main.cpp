@@ -125,6 +125,7 @@ uint8_t sector = 0;
 uint16_t timeSectorSet = 4*60;
 volatile uint16_t timeSector = 0;
 uint8_t timeSectorVectorMin[11];
+uint8_t celPhoneNumber[11];
 uint8_t flag_1s;
 //uint8_t flag_SMS = 0;
 //uint8_t flag_valve = 0;
@@ -161,6 +162,7 @@ char inChar, aux[3], aux2[5], sInstr[15];
 uint8_t k=0, rLength, opcode;
 char sInstrSIM900[65];
 char sInstrBluetooth[20];
+char celPhoneNumber_str[12];
 
 uint8_t enableTranslate_BT = 0;
 uint8_t enableTranslate_SIM900 = 0;
@@ -385,7 +387,7 @@ void motor_start()
 
 		}
 	}
-	_delay_ms(25);
+	_delay_ms(75);
 	k2_on();
 
 	Serial1.print("Count = ");
@@ -592,9 +594,22 @@ uint16_t timeSectorMemory(uint8_t sector)
 
 void SIM900_sendSMS(char *smsbuffer)
 {
-	Serial2.println("AT+CMGF=1\r");    //Because we want to send the SMS in text mode
+	char str1[20];
+	char *smsCommand = NULL;
+	smsCommand = (char*)malloc(30*sizeof(char));
+
+	sprintf(smsCommand,"AT+CMGF=1\r");	//Because we want to send the SMS in text mode
+	Serial2.println(smsCommand);
 	delay(200);
-	Serial2.println("AT+CMGS=\"27988081875\"");//send sms message, be careful need to add a country code before the cellphone number
+
+	sprintf(str1,"AT+CMGS=\"");
+
+	sprintf(smsCommand,"%s%s\"",str1,celPhoneNumber_str);
+	Serial2.println(smsCommand);
+
+	free(smsCommand);
+
+//	Serial2.println("AT+CMGS=\"27988081875\"");//send sms message, be careful need to add a country code before the cellphone number
 	delay(200);
 	Serial2.println(smsbuffer);//the content of the message
 //	SerialGSM.print(buffer_to_send);
@@ -623,7 +638,7 @@ void SIM900_reset()
 	_delay_ms(20);
 	PORTH &= ~(1<<PH5);
 }
-int SIM900_checkAlive()
+int  SIM900_checkAlive()
 {
 	int enableCompare =0, r=0;
 	char str[3];
@@ -1020,6 +1035,22 @@ void refreshTimeSectors()
 	for(i=0;i<11;i++)
 		timeSectorVectorMin[i] = eeprom_read_byte((uint8_t *)(i+1+10));
 }
+void refreshCelPhoneNumber()
+{
+	int i;
+	if(eeprom_read_byte((uint8_t *)(23))>9)
+	{
+		for(i=0;i<11;i++)
+		{
+			eeprom_write_byte(( uint8_t *)(i+23), 9);
+		}
+	}
+
+	for(i=0;i<11;i++)
+		celPhoneNumber[i] = eeprom_read_byte((uint8_t *)(i+23));
+
+	sprintf(celPhoneNumber_str,"%d%d%d%d%d%d%d%d%d%d%d",celPhoneNumber[0],celPhoneNumber[1],celPhoneNumber[2],celPhoneNumber[3],celPhoneNumber[4],celPhoneNumber[5],celPhoneNumber[6],celPhoneNumber[7],celPhoneNumber[8],celPhoneNumber[9],celPhoneNumber[10]);
+}
 
 void comm_SIM900()
 {
@@ -1188,7 +1219,24 @@ void summary_Print(uint8_t opt)
 
 			break;
 
-		case 9:
+		case 2:
+			sprintf(buffer,"Number:  %s",celPhoneNumber_str);
+			if(enableSIM900_Send)
+			{
+				enableSIM900_Send = 0;
+				SIM900_sendSMS(buffer);
+			}
+			else
+			{
+				Serial1.println(buffer);
+			}
+
+			break;
+
+
+			break;
+
+		default:
 
 			sprintf(buffer,"Comando não implementado!");
 			if(enableSIM900_Send)
@@ -1219,16 +1267,23 @@ void summary_Print(uint8_t opt)
 
 void handleMessage()
 {
-/*	0;			Verificar detalhes
-	1123030;	Ajustar a hora
-	201012014;	ajustar a dada
-	31;			ligar (31) ou desligar (30) o motor
-	4s01:1;		acionamento das valvulas
-	5t01:09;	tempo em minutos para cada setor
-	60;			Modo de funcionamento
-		60; 	- Manual
-		61;		- Automatico
-		62;		- Executa automatico 1x
+/*	0;				Verificar detalhes - Detalhes simples (tempo).
+		00;				- Detalhes simples (tempo).
+		01;				- Relacao do status das valvulas (ligada ou desligada)
+		02;				- Numero do telefone.
+
+	1123030;		Ajustar a hora
+	201012014;		ajustar a dada
+	31;				ligar (31) ou desligar (30) o motor
+	4s01:1;			acionamento das valvulas
+	5t01:09;		tempo em minutos para cada setor
+	60;				Modo de funcionamento
+		60; 			- Manual
+		61;				- Automatico
+		62;				- Executa automatico 1x
+	727988081875;	Troca número de telefone
+
+
 
 */
 
@@ -1237,18 +1292,16 @@ void handleMessage()
 	{
 		enableDecode = 0;
 
-		int i;
-		for(i=0;i<rLength;i++)
-		{
-			Serial1.println(sInstr[i]);
-		}
-
-		for(i=0;i<rLength;i++)
-		{
-			Serial1.println(sInstr[i],HEX);
-		}
-
-
+//		int i;
+//		for(i=0;i<rLength;i++)
+//		{
+//			Serial1.println(sInstr[i]);
+//		}
+//
+//		for(i=0;i<rLength;i++)
+//		{
+//			Serial1.println(sInstr[i],HEX);
+//		}
 
 		// Getting the opcode
 		aux[0] = '0';
@@ -1261,7 +1314,19 @@ void handleMessage()
 		{
 			case 0:		// Check status
 
-				summary_Print(0);
+				if(sInstr[1] == ';')
+				{
+					summary_Print(0);
+				}
+				else
+				{
+					aux[0] = '0';
+					aux[1] = sInstr[1];
+					aux[2] = '\0';
+					uint8_t statusCommand = (uint8_t) atoi(aux);
+
+					summary_Print(statusCommand);
+				}
 
 				break;
 
@@ -1319,6 +1384,7 @@ void handleMessage()
 			case 3:		// Set motor ON/OFF
 
 				uint8_t motorCommand;
+
 				aux[0] = '0';
 				aux[1] = sInstr[1];
 				aux[2] = '\0';
@@ -1352,8 +1418,6 @@ void handleMessage()
 					valveInstr(sector, sectorCommand);
 					sprintf(buffer,"Sector%.2d: [%d], Time: %.2d:%.2d:%.2d,",sector, sectorCommand, tm.Hour, tm.Minute, tm.Second);
 					Serial1.println(buffer);
-
-//					summary_Print(1);
 				}
 				break;
 
@@ -1377,20 +1441,13 @@ void handleMessage()
 
 					refreshTimeSectors();
 					summary_Print(0);
-//					printTimeSectors();
-
-//					eeprom_update_byte(( uint8_t *)46 , sectorTimeChange);
-
-//					ByteOfData = eeprom_read_byte (( uint8_t *) 46) ;
-
-//					valveInstr(sector, sectorCommand);
-//					sprintf(buffer,"Sector%.2d: [%d], Time: %.2d:%.2d:%.2d,",sector, sectorCommand, tm.Hour, tm.Minute, tm.Second);
-//					Serial1.println(buffer);
 				}
 
 				break;
 
 			case 6:
+				// 6x;
+				// 63:sxx;
 				uint8_t setCommand;
 				aux[0] = '0';
 				aux[1] = sInstr[1];
@@ -1413,7 +1470,19 @@ void handleMessage()
 						break;
 
 					case 2:
+
+						if(sInstr[2] == ':')
+						{
+
+							aux[0] = sInstr[3];
+							aux[1] = sInstr[4];
+							aux[2] = '\0';
+							timeSectorSet = (uint16_t) 60*atoi(aux);
+
+						}
+
 						stateMode = automatic;
+
 						break;
 
 					case 3:
@@ -1436,13 +1505,37 @@ void handleMessage()
 						Serial1.println("Comando não implementado!");
 						break;
 				}
-//				summary_Print(0);
+				summary_Print(0);
 
 				break;
 
 			case 7:
-				summary_Print(1);
-			break;
+			// 727988081875;
+
+				int i;
+				for(i=0;i<11;i++)
+				{
+					aux[0] = '0';
+					aux[1] = sInstr[i+1];
+					aux[2] = '\0';
+					celPhoneNumber[i] = (uint8_t) atoi(aux);
+					eeprom_write_byte(( uint8_t *)(i+23), celPhoneNumber[i]);
+				}
+
+				refreshCelPhoneNumber();
+				summary_Print(2);
+
+				break;
+
+//					printTimeSectors();
+
+//					eeprom_update_byte(( uint8_t *)46 , sectorTimeChange);
+
+//					ByteOfData = eeprom_read_byte (( uint8_t *) 46) ;
+
+//					valveInstr(sector, sectorCommand);
+//					sprintf(buffer,"Sector%.2d: [%d], Time: %.2d:%.2d:%.2d,",sector, sectorCommand, tm.Hour, tm.Minute, tm.Second);
+//					Serial1.println(buffer);
 
 			case 8:
 				GLCD.Init();
@@ -1519,12 +1612,9 @@ int main()
 	Serial2.begin(9600);	// Connected to SIM900
 
 	Serial1.println("- Raiden Controller Started! -");
-	refreshTimeSectors();
 
-	sInstr[0] = '0';
-	sInstr[1] = '0';
-	sInstr[2] = '0';
-	sInstr[3] = ';';
+	refreshTimeSectors();
+	refreshCelPhoneNumber();
 
 	while (1)
 	{
@@ -1552,682 +1642,3 @@ int main()
 //		Serial.println(freeMemory());
 	}
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-//				sprintf(buffer," Per.: %d, Motor: %d",periodo, motorStatus);
-//				Serial1.println(buffer);
-
-//				sprintf(buffer,"Uptime: %.2d:%.2d:%.2d, %d day(s), %d month(s), %d year(s)", hour(), minute(), second(), day()-1, month()-1, year()-1970);
-//				Serial1.println(buffer);
-//
-//				sprintf(buffer,"Ligou_01___: %.2d:%.2d:%.2d, %.2d/%.2d/%d D= %.3d cm",hourLog_ON[0], minuteLog_ON[0], secondLog_ON[0], dayLog_ON[0], monthLog_ON[0], tmYearToCalendar(YearLog_ON[0]), distanceLog_ON[0]);
-//				Serial1.println(buffer);
-//
-//				sprintf(buffer,"Ligou_02___: %.2d:%.2d:%.2d, %.2d/%.2d/%d D= %.3d cm",hourLog_ON[1], minuteLog_ON[1], secondLog_ON[1], dayLog_ON[1], monthLog_ON[1], tmYearToCalendar(YearLog_ON[1]), distanceLog_ON[1]);
-//				Serial1.println(buffer);
-//
-//				sprintf(buffer,"Desligou_01: %.2d:%.2d:%.2d, %.2d/%.2d/%d D= %.3d cm",hourLog_OFF[0], minuteLog_OFF[0], secondLog_OFF[0], dayLog_OFF[0], monthLog_OFF[0], tmYearToCalendar(YearLog_OFF[0]), distanceLog_OFF[0]);
-//				Serial1.println(buffer);
-//
-//				sprintf(buffer,"Desligou_02: %.2d:%.2d:%.2d, %.2d/%.2d/%d D= %.3d cm",hourLog_OFF[1], minuteLog_OFF[1], secondLog_OFF[1], dayLog_OFF[1], monthLog_OFF[1], tmYearToCalendar(YearLog_OFF[1]), distanceLog_OFF[1]);
-//				Serial1.println(buffer);
-
-
-
-
-
-// state machine
-//	switch(stateSector)
-//	{
-//		case 1:
-//			if(!flag_sector)
-//			{
-//				flag_sector = 1;
-//				valveInstr(1,1);
-//
-//				if(stateMode == automatic)
-//					timeSector = timeSectorSet;
-//				else
-//					timeSector = timeSectorMemory(stateSector);
-//
-//				sprintf(buffer_SIM900,"Time: %.2d:%.2d:%.2d, %.2d/%.2d/%d \n Sector[%.2d]: ON!",tm.Hour, tm.Minute, tm.Second, tm.Day, tm.Month, tmYearToCalendar(tm.Year), stateSector);
-//				SIM900_sendSMS(buffer_SIM900);
-//			}
-//			if(flag_timeOVF)
-//			{
-//				stateSector = verifyNextValve(stateSector+1);
-//				flag_sector = 0;
-//				flag_timeOVF = 0;
-//			}
-//			break;
-//
-//		case 2:
-//			if(!flag_sector)
-//			{
-//				flag_sector = 1;
-//
-//				int i;
-//				for(i=1;i<stateSector;i++)
-//				{
-//					valveInstr(i,0);
-//				}
-//				valveInstr(stateSector,1);
-//
-//				if(stateMode == automatic)
-//					timeSector = timeSectorSet;
-//				else
-//					timeSector = timeSectorMemory(stateSector);
-//
-//				sprintf(buffer_SIM900,"Time: %.2d:%.2d:%.2d, %.2d/%.2d/%d \n Sector[%.2d]: ON!",tm.Hour, tm.Minute, tm.Second, tm.Day, tm.Month, tmYearToCalendar(tm.Year), stateSector);
-//				SIM900_sendSMS(buffer_SIM900);
-//			}
-//			if(flag_timeOVF)
-//			{
-//				stateSector = verifyNextValve(stateSector+1);
-//				flag_sector = 0;
-//				flag_timeOVF = 0;
-//			}
-//			break;
-//
-//		case 3:
-//			if(!flag_sector)
-//			{
-//				flag_sector = 1;
-//
-//				int i;
-//				for(i=1;i<stateSector;i++)
-//				{
-//					valveInstr(i,0);
-//				}
-//				valveInstr(stateSector,1);
-//
-//				if(stateMode == automatic)
-//					timeSector = timeSectorSet;
-//				else
-//					timeSector = timeSectorMemory(stateSector);
-//
-//				sprintf(buffer_SIM900,"Time: %.2d:%.2d:%.2d, %.2d/%.2d/%d \n Sector[%.2d]: ON!",tm.Hour, tm.Minute, tm.Second, tm.Day, tm.Month, tmYearToCalendar(tm.Year), stateSector);
-//				SIM900_sendSMS(buffer_SIM900);
-//			}
-//			if(flag_timeOVF)
-//			{
-//				stateSector = verifyNextValve(stateSector+1);
-//				flag_sector = 0;
-//				flag_timeOVF = 0;
-//			}
-//			break;
-//
-//		case 4:
-//			if(!flag_sector)
-//			{
-//				flag_sector = 1;
-//
-//				int i;
-//				for(i=1;i<stateSector;i++)
-//				{
-//					valveInstr(i,0);
-//				}
-//				valveInstr(stateSector,1);
-//
-//				if(stateMode == automatic)
-//					timeSector = timeSectorSet;
-//				else
-//					timeSector = timeSectorMemory(stateSector);
-//
-//				sprintf(buffer_SIM900,"Time: %.2d:%.2d:%.2d, %.2d/%.2d/%d \n Sector[%.2d]: ON!",tm.Hour, tm.Minute, tm.Second, tm.Day, tm.Month, tmYearToCalendar(tm.Year), stateSector);
-//				SIM900_sendSMS(buffer_SIM900);
-//			}
-//			if(flag_timeOVF)
-//			{
-//				stateSector = verifyNextValve(stateSector+1);
-//				flag_sector = 0;
-//				flag_timeOVF = 0;
-//			}
-//			break;
-//
-//		case 5:
-//			if(!flag_sector)
-//			{
-//				flag_sector = 1;
-//
-//				int i;
-//				for(i=1;i<stateSector;i++)
-//				{
-//					valveInstr(i,0);
-//				}
-//				valveInstr(stateSector,1);
-//
-//				if(stateMode == automatic)
-//					timeSector = timeSectorSet;
-//				else
-//					timeSector = timeSectorMemory(stateSector);
-//
-//				sprintf(buffer_SIM900,"Time: %.2d:%.2d:%.2d, %.2d/%.2d/%d \n Sector[%.2d]: ON!",tm.Hour, tm.Minute, tm.Second, tm.Day, tm.Month, tmYearToCalendar(tm.Year), stateSector);
-//				SIM900_sendSMS(buffer_SIM900);
-//			}
-//			if(flag_timeOVF)
-//			{
-//				stateSector = verifyNextValve(stateSector+1);
-//				flag_sector = 0;
-//				flag_timeOVF = 0;
-//			}
-//			break;
-//
-//		case 6:
-//			if(!flag_sector)
-//			{
-//				flag_sector = 1;
-//
-//				int i;
-//				for(i=1;i<stateSector;i++)
-//				{
-//					valveInstr(i,0);
-//				}
-//				valveInstr(stateSector,1);
-//
-//				if(stateMode == automatic)
-//					timeSector = timeSectorSet;
-//				else
-//					timeSector = timeSectorMemory(stateSector);
-//
-//				sprintf(buffer_SIM900,"Time: %.2d:%.2d:%.2d, %.2d/%.2d/%d \n Sector[%.2d]: ON!",tm.Hour, tm.Minute, tm.Second, tm.Day, tm.Month, tmYearToCalendar(tm.Year), stateSector);
-//				SIM900_sendSMS(buffer_SIM900);
-//			}
-//			if(flag_timeOVF)
-//			{
-//				stateSector = verifyNextValve(stateSector+1);
-//				flag_sector = 0;
-//				flag_timeOVF = 0;
-//			}
-//			break;
-//
-//		case 7:
-//			if(!flag_sector)
-//			{
-//				flag_sector = 1;
-//
-//				int i;
-//				for(i=1;i<stateSector;i++)
-//				{
-//					valveInstr(i,0);
-//				}
-//				valveInstr(stateSector,1);
-//
-//				if(stateMode == automatic)
-//					timeSector = timeSectorSet;
-//				else
-//					timeSector = timeSectorMemory(stateSector);
-//
-//				sprintf(buffer_SIM900,"Time: %.2d:%.2d:%.2d, %.2d/%.2d/%d \n Sector[%.2d]: ON!",tm.Hour, tm.Minute, tm.Second, tm.Day, tm.Month, tmYearToCalendar(tm.Year), stateSector);
-//				SIM900_sendSMS(buffer_SIM900);
-//			}
-//			if(flag_timeOVF)
-//			{
-//				stateSector = verifyNextValve(stateSector+1);
-//				flag_sector = 0;
-//				flag_timeOVF = 0;
-//			}
-//			break;
-//
-//		case 8:
-//			if(!flag_sector)
-//			{
-//				flag_sector = 1;
-//
-//				int i;
-//				for(i=1;i<stateSector;i++)
-//				{
-//					valveInstr(i,0);
-//				}
-//				valveInstr(stateSector,1);
-//
-//				if(stateMode == automatic)
-//					timeSector = timeSectorSet;
-//				else
-//					timeSector = timeSectorMemory(stateSector);
-//
-//				sprintf(buffer_SIM900,"Time: %.2d:%.2d:%.2d, %.2d/%.2d/%d \n Sector[%.2d]: ON!",tm.Hour, tm.Minute, tm.Second, tm.Day, tm.Month, tmYearToCalendar(tm.Year), stateSector);
-//				SIM900_sendSMS(buffer_SIM900);
-//			}
-//			if(flag_timeOVF)
-//			{
-//				stateSector = verifyNextValve(stateSector+1);
-//				flag_sector = 0;
-//				flag_timeOVF = 0;
-//			}
-//			break;
-//
-//		case 9:
-//			if(!flag_sector)
-//			{
-//				flag_sector = 1;
-//
-//				int i;
-//				for(i=1;i<stateSector;i++)
-//				{
-//					valveInstr(i,0);
-//				}
-//				valveInstr(stateSector,1);
-//
-//				if(stateMode == automatic)
-//					timeSector = timeSectorSet;
-//				else
-//					timeSector = timeSectorMemory(stateSector);
-//
-//				sprintf(buffer_SIM900,"Time: %.2d:%.2d:%.2d, %.2d/%.2d/%d \n Sector[%.2d]: ON!",tm.Hour, tm.Minute, tm.Second, tm.Day, tm.Month, tmYearToCalendar(tm.Year), stateSector);
-//				SIM900_sendSMS(buffer_SIM900);
-//			}
-//			if(flag_timeOVF)
-//			{
-//				stateSector = verifyNextValve(stateSector+1);
-//				flag_sector = 0;
-//				flag_timeOVF = 0;
-//			}
-//			break;
-//
-//		case 10:
-//			if(!flag_sector)
-//			{
-//				flag_sector = 1;
-//
-//				int i;
-//				for(i=1;i<stateSector;i++)
-//				{
-//					valveInstr(i,0);
-//				}
-//				valveInstr(stateSector,1);
-//
-//				if(stateMode == automatic)
-//					timeSector = timeSectorSet;
-//				else
-//					timeSector = timeSectorMemory(stateSector);
-//
-//				sprintf(buffer_SIM900,"Time: %.2d:%.2d:%.2d, %.2d/%.2d/%d \n Sector[%.2d]: ON!",tm.Hour, tm.Minute, tm.Second, tm.Day, tm.Month, tmYearToCalendar(tm.Year), stateSector);
-//				SIM900_sendSMS(buffer_SIM900);
-//			}
-//			if(flag_timeOVF)
-//			{
-//				stateSector = verifyNextValve(stateSector+1);
-//				flag_sector = 0;
-//				flag_timeOVF = 0;
-//			}
-//			break;
-//
-//		case 11:
-//			if(!flag_sector)
-//			{
-//				flag_sector = 1;
-//
-//				int i;
-//				for(i=1;i<stateSector;i++)
-//				{
-//					valveInstr(i,0);
-//				}
-//				valveInstr(stateSector,1);
-//
-//				if(stateMode == automatic)
-//					timeSector = timeSectorSet;
-//				else
-//					timeSector = timeSectorMemory(stateSector);
-//
-//				sprintf(buffer_SIM900,"Time: %.2d:%.2d:%.2d, %.2d/%.2d/%d \n Sector[%.2d]: ON!",tm.Hour, tm.Minute, tm.Second, tm.Day, tm.Month, tmYearToCalendar(tm.Year), stateSector);
-//				SIM900_sendSMS(buffer_SIM900);
-//			}
-//			if(flag_timeOVF)
-//			{
-//				stateSector = verifyNextValve(stateSector+1);
-//				flag_sector = 0;
-//				flag_timeOVF = 0;
-//			}
-//			break;
-//	}
-
-
-
-
-//void process_Automatic()
-//{
-//	if(!motorStatus)
-//	{
-//		valveInstr(1,1);
-//		motor_start();
-//
-//		_delay_ms(100);
-//		GLCD.Init();
-//
-//		flag_sector = 0;
-//		flag_timeOVF = 0;
-////		stateSector = verifyNextValve(1);
-//	}
-//
-////	if(!flag_sector)
-////	{
-////		sprintf(buffer_SIM900,"Time: %.2d:%.2d:%.2d, %.2d/%.2d/%d \n Sector[%.2d]: ON!",tm.Hour, tm.Minute, tm.Second, tm.Day, tm.Month, tmYearToCalendar(tm.Year), stateSector);
-////		SIM900_sendSMS(buffer_SIM900);
-////	}
-//
-//	switch(stateSector)
-//	{
-//		case 1:
-//			if(!flag_sector)
-//			{
-//				valveInstr(1,1);
-//				timeSector = timeSectorSet;
-//				flag_sector = 1;
-//
-//				sprintf(buffer_SIM900,"Time: %.2d:%.2d:%.2d, %.2d/%.2d/%d \n Sector[%.2d]: ON!",tm.Hour, tm.Minute, tm.Second, tm.Day, tm.Month, tmYearToCalendar(tm.Year), stateSector);
-//				SIM900_sendSMS(buffer_SIM900);
-//			}
-//			if(flag_timeOVF)
-//			{
-//				stateSector = 2;
-//				flag_sector = 0;
-//				flag_timeOVF = 0;
-//			}
-//			break;
-//
-//		case 2:
-//			if(!flag_sector)
-//			{
-//				valveInstr(2,1);
-//				valveInstr(1,0);
-//				timeSector = timeSectorSet;
-//				flag_sector = 1;
-//
-//				sprintf(buffer_SIM900,"Time: %.2d:%.2d:%.2d, %.2d/%.2d/%d \n Sector[%.2d]: ON!",tm.Hour, tm.Minute, tm.Second, tm.Day, tm.Month, tmYearToCalendar(tm.Year), stateSector);
-//				SIM900_sendSMS(buffer_SIM900);
-//			}
-//			if(flag_timeOVF)
-//			{
-//				stateSector = 3;
-//				flag_sector = 0;
-//				flag_timeOVF = 0;
-//			}
-//			break;
-//
-//		case 3:
-//			if(!flag_sector)
-//			{
-//				valveInstr(3,1);
-//				valveInstr(2,0);
-//				timeSector = timeSectorSet;
-//				flag_sector = 1;
-//
-//				sprintf(buffer_SIM900,"Time: %.2d:%.2d:%.2d, %.2d/%.2d/%d \n Sector[%.2d]: ON!",tm.Hour, tm.Minute, tm.Second, tm.Day, tm.Month, tmYearToCalendar(tm.Year), stateSector);
-//				SIM900_sendSMS(buffer_SIM900);
-//			}
-//			if(flag_timeOVF)
-//			{
-//				stateSector = 4;
-//				flag_sector = 0;
-//				flag_timeOVF = 0;
-//			}
-//			break;
-//
-//		case 4:
-//			if(!flag_sector)
-//			{
-//				valveInstr(4,1);
-//				valveInstr(3,0);
-//				timeSector = timeSectorSet;
-//				flag_sector = 1;
-//
-//				sprintf(buffer_SIM900,"Time: %.2d:%.2d:%.2d, %.2d/%.2d/%d \n Sector[%.2d]: ON!",tm.Hour, tm.Minute, tm.Second, tm.Day, tm.Month, tmYearToCalendar(tm.Year), stateSector);
-//				SIM900_sendSMS(buffer_SIM900);
-//			}
-//			if(flag_timeOVF)
-//			{
-//				stateSector = 5;
-//				flag_sector = 0;
-//				flag_timeOVF = 0;
-//			}
-//			break;
-//
-//		case 5:
-//			if(!flag_sector)
-//			{
-//				valveInstr(5,1);
-//				valveInstr(4,0);
-//				timeSector = timeSectorSet;
-//				flag_sector = 1;
-//
-//				sprintf(buffer_SIM900,"Time: %.2d:%.2d:%.2d, %.2d/%.2d/%d \n Sector[%.2d]: ON!",tm.Hour, tm.Minute, tm.Second, tm.Day, tm.Month, tmYearToCalendar(tm.Year), stateSector);
-//				SIM900_sendSMS(buffer_SIM900);
-//			}
-//			if(flag_timeOVF)
-//			{
-//				stateSector = 6;
-//				flag_sector = 0;
-//				flag_timeOVF = 0;
-//			}
-//			break;
-//
-//		case 6:
-//			if(!flag_sector)
-//			{
-//				valveInstr(6,1);
-//				valveInstr(5,0);
-//				timeSector = timeSectorSet;
-//				flag_sector = 1;
-//
-//				sprintf(buffer_SIM900,"Time: %.2d:%.2d:%.2d, %.2d/%.2d/%d \n Sector[%.2d]: ON!",tm.Hour, tm.Minute, tm.Second, tm.Day, tm.Month, tmYearToCalendar(tm.Year), stateSector);
-//				SIM900_sendSMS(buffer_SIM900);
-//			}
-//			if(flag_timeOVF)
-//			{
-//				stateSector = 7;
-//				flag_sector = 0;
-//				flag_timeOVF = 0;
-//			}
-//			break;
-//
-//		case 7:
-//			if(!flag_sector)
-//			{
-//				valveInstr(7,1);
-//				valveInstr(6,0);
-//				timeSector = timeSectorSet;
-//				flag_sector = 1;
-//
-//				sprintf(buffer_SIM900,"Time: %.2d:%.2d:%.2d, %.2d/%.2d/%d \n Sector[%.2d]: ON!",tm.Hour, tm.Minute, tm.Second, tm.Day, tm.Month, tmYearToCalendar(tm.Year), stateSector);
-//				SIM900_sendSMS(buffer_SIM900);
-//			}
-//			if(flag_timeOVF)
-//			{
-//				stateSector = 8;
-//				flag_sector = 0;
-//				flag_timeOVF = 0;
-//			}
-//			break;
-//
-//		case 8:
-//			if(!flag_sector)
-//			{
-//				valveInstr(8,1);
-//				valveInstr(7,0);
-//				timeSector = timeSectorSet;
-//				flag_sector = 1;
-//
-//				sprintf(buffer_SIM900,"Time: %.2d:%.2d:%.2d, %.2d/%.2d/%d \n Sector[%.2d]: ON!",tm.Hour, tm.Minute, tm.Second, tm.Day, tm.Month, tmYearToCalendar(tm.Year), stateSector);
-//				SIM900_sendSMS(buffer_SIM900);
-//			}
-//			if(flag_timeOVF)
-//			{
-//				stateSector = 9;
-//				flag_sector = 0;
-//				flag_timeOVF = 0;
-//			}
-//			break;
-//
-//		case 9:
-//			if(!flag_sector)
-//			{
-//				valveInstr(9,1);
-//				valveInstr(8,0);
-//				timeSector = timeSectorSet;
-//				flag_sector = 1;
-//
-//				sprintf(buffer_SIM900,"Time: %.2d:%.2d:%.2d, %.2d/%.2d/%d \n Sector[%.2d]: ON!",tm.Hour, tm.Minute, tm.Second, tm.Day, tm.Month, tmYearToCalendar(tm.Year), stateSector);
-//				SIM900_sendSMS(buffer_SIM900);
-//			}
-//			if(flag_timeOVF)
-//			{
-//				stateSector = 10;
-//				flag_sector = 0;
-//				flag_timeOVF = 0;
-//			}
-//			break;
-//
-//		case 10:
-//			if(!flag_sector)
-//			{
-//				valveInstr(10,1);
-//				valveInstr(9,0);
-//				timeSector = timeSectorSet;
-//				flag_sector = 1;
-//
-//				sprintf(buffer_SIM900,"Time: %.2d:%.2d:%.2d, %.2d/%.2d/%d \n Sector[%.2d]: ON!",tm.Hour, tm.Minute, tm.Second, tm.Day, tm.Month, tmYearToCalendar(tm.Year), stateSector);
-//				SIM900_sendSMS(buffer_SIM900);
-//			}
-//			if(flag_timeOVF)
-//			{
-//				stateSector = 11;
-//				flag_sector = 0;
-//				flag_timeOVF = 0;
-//			}
-//			break;
-//
-//		case 11:
-//			if(!flag_sector)
-//			{
-//				valveInstr(11,1);
-//				valveInstr(10,0);
-//				timeSector = timeSectorSet;
-//				flag_sector = 1;
-//
-//				sprintf(buffer_SIM900,"Time: %.2d:%.2d:%.2d, %.2d/%.2d/%d \n Sector[%.2d]: ON!",tm.Hour, tm.Minute, tm.Second, tm.Day, tm.Month, tmYearToCalendar(tm.Year), stateSector);
-//				SIM900_sendSMS(buffer_SIM900);
-//			}
-//			if(flag_timeOVF)
-//			{
-//				stateSector = 1;
-//				flag_sector = 0;
-//				flag_timeOVF = 0;
-//
-//				valveInstr(11,0);
-//
-//				motor_stop();
-//				stateMode = manual;
-//
-//
-//				sprintf(buffer_SIM900,"Time: %.2d:%.2d:%.2d, %.2d/%.2d/%d \n System Stoped!",tm.Hour, tm.Minute, tm.Second, tm.Day, tm.Month, tmYearToCalendar(tm.Year));
-//				SIM900_sendSMS(buffer_SIM900);
-//			}
-//			break;
-//	}
-//}
-
-
-
-//void comm_Bluetooth()
-//{
-//	 char data [21];
-//	 int number_of_bytes_received;
-//
-//	 if(Serial1.available() > 0)
-//	 {
-//	   number_of_bytes_received = Serial1.readBytesUntil (13,data,20); // read bytes (max. 20) from buffer, untill <CR> (13). store bytes in data. count the bytes recieved.
-//	   data[number_of_bytes_received] = 0; // add a 0 terminator to the char array
-//
-//		 bool result = strcmp (data, "whatever");
-//
-//		 if (result == false)
-//		 {
-//		   Serial1.println("data matches whatever");
-//		 }
-//		 else
-//		 {
-//		   Serial1.println("data does not match whatever");
-//		 }
-//		 Serial1.flush();
-//	 }
-//}
-
-//int main() {
-//
-//	// Initialize arduino hardware requirements.
-//	init();
-//	init_valves();
-//	init_contactors();
-//	init_motorDriver();
-//	init_ADC();
-//	init_SIM900();
-//	init_Timer1_1Hz();
-//
-//	Serial1.begin(38400);	// Bluetooth
-//	Serial.begin(9600);		// Debug
-//	Serial2.begin(9600);	// Connected to SIM900
-//
-//	GLCD.Init();
-//	GLCD.SelectFont(SystemFont5x7);
-//
-//	// Welcome!
-//	GLCD.CursorTo(0,7);
-//	GLCD.print("Motor Testing Mode! v0.0");
-//	Serial1.println("- Raiden Power -");
-//
-////	uint8_t sector;
-////	char c = '0';
-////	uint8_t k=0;
-////	char buffer[5];
-//	SIM900_checkAlive();
-////	SIM900_sendSMS("Turning ON!");
-//
-//	while(1)
-//	{
-////		Refresh all variables - Electrical par, Time period;
-//		refreshVariables();
-//
-////		Communication between SIM900 and serial port computer
-//		comm_SIM900();
-//
-////		Communication between Raiden and Bluetooth terminal cellphone
-//		comm_Bluetooth2();
-//
-////		Command Decisions
-////		control_decision();
-//
-//		comm_SIM900_Bluetooth();
-//
-////		Do process
-////		process_main();
-//
-////		GLD Screen Informations
-//		summary_GLCD();
-//	}
-//}
