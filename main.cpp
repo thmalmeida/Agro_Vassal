@@ -137,8 +137,8 @@ char buffer[180];
 char c;
 uint8_t flag_sector=1;
 volatile uint8_t flag_timeOVF=0;
-char buffer_GLCD[40];
-char buffer_SIM900[65];
+//char buffer_GLCD[30];
+//char buffer_SIM900[70];
 uint16_t sample = 0;
 
 // Time decision variables
@@ -160,9 +160,9 @@ volatile uint8_t flag_summaryGLCD = 0;
 // Bluetooth variables
 char inChar, aux[3], aux2[5], sInstr[15];
 uint8_t k=0, rLength, opcode;
-char sInstrSIM900[65];
+char sInstrSIM900[80];
 char sInstrBluetooth[20];
-char celPhoneNumber_str[12];
+char celPhoneNumber_str[20];
 
 uint8_t enableTranslate_BT = 0;
 uint8_t enableTranslate_SIM900 = 0;
@@ -594,7 +594,6 @@ uint16_t timeSectorMemory(uint8_t sector)
 
 void SIM900_sendSMS(char *smsbuffer)
 {
-	char str1[20];
 	char *smsCommand = NULL;
 	smsCommand = (char*)malloc(30*sizeof(char));
 
@@ -602,12 +601,8 @@ void SIM900_sendSMS(char *smsbuffer)
 	Serial2.println(smsCommand);
 	delay(200);
 
-	sprintf(str1,"AT+CMGS=\"");
-
-	sprintf(smsCommand,"%s%s\"",str1,celPhoneNumber_str);
+	sprintf(smsCommand,"AT+CMGS=\"%s\"",celPhoneNumber_str);
 	Serial2.println(smsCommand);
-
-	free(smsCommand);
 
 //	Serial2.println("AT+CMGS=\"27988081875\"");//send sms message, be careful need to add a country code before the cellphone number
 	delay(200);
@@ -618,6 +613,8 @@ void SIM900_sendSMS(char *smsbuffer)
 	Serial2.println((char)26);//the ASCII code of the ctrl+z is 26
 	delay(2000);
 	Serial2.println();
+
+	free(smsCommand);
 }
 void SIM900_power()	// GSM AND GPRS Functions
 {
@@ -766,7 +763,7 @@ void verifyValve()
 //		Serial1.print("Im = ");
 //		Serial1.println(Im);
 
-		if(Im<85)
+		if(Im<80)
 		{
 			sprintf(buffer,"Sistema desligado durante o setor[%.2d]!",stateSector);
 			SIM900_sendSMS(buffer);
@@ -851,8 +848,8 @@ uint8_t verifyNextValve(uint8_t sector)
 			valveInstr(sector,0);		// Desliga o que ligou
 			turnAll_OFF();
 
-			sprintf(buffer_SIM900,"Time: %.2d:%.2d:%.2d, %.2d/%.2d/%d \n Sistema Desligado!",tm.Hour, tm.Minute, tm.Second, tm.Day, tm.Month, tmYearToCalendar(tm.Year));
-			SIM900_sendSMS(buffer_SIM900);
+			sprintf(buffer,"Time: %.2d:%.2d:%.2d, %.2d/%.2d/%d \n Sistema Desligado!",tm.Hour, tm.Minute, tm.Second, tm.Day, tm.Month, tmYearToCalendar(tm.Year));
+			SIM900_sendSMS(buffer);
 
 			flag_timeMatch = 0;
 
@@ -911,8 +908,8 @@ void process_Working()
 		else
 			timeSector = timeSectorMemory(stateSector);
 
-		sprintf(buffer_SIM900,"Time: %.2d:%.2d:%.2d, %.2d/%.2d/%d \n Sector[%.2d]: ON!",tm.Hour, tm.Minute, tm.Second, tm.Day, tm.Month, tmYearToCalendar(tm.Year), stateSector);
-		SIM900_sendSMS(buffer_SIM900);
+		sprintf(buffer,"Time: %.2d:%.2d:%.2d, %.2d/%.2d/%d \n Sector[%.2d]: ON!",tm.Hour, tm.Minute, tm.Second, tm.Day, tm.Month, tmYearToCalendar(tm.Year), stateSector);
+		SIM900_sendSMS(buffer);
 	}
 
 	// Verifica o proximo setor
@@ -1038,18 +1035,30 @@ void refreshTimeSectors()
 void refreshCelPhoneNumber()
 {
 	int i;
-	if(eeprom_read_byte((uint8_t *)(23))>9)
+	uint8_t flag_Error01 = 0;
+	for(i=0;i<11;i++)
 	{
-		for(i=0;i<11;i++)
+		if(eeprom_read_byte((uint8_t *)(i+23))>9)
 		{
-			eeprom_write_byte(( uint8_t *)(i+23), 9);
+			flag_Error01 = 1;
+//			eeprom_write_byte(( uint8_t *)(i+23), 9);
 		}
 	}
 
-	for(i=0;i<11;i++)
-		celPhoneNumber[i] = eeprom_read_byte((uint8_t *)(i+23));
+	if(!flag_Error01)
+	{
+		for(i=0;i<11;i++)
+			celPhoneNumber[i] = eeprom_read_byte((uint8_t *)(i+23));
 
-	sprintf(celPhoneNumber_str,"%d%d%d%d%d%d%d%d%d%d%d",celPhoneNumber[0],celPhoneNumber[1],celPhoneNumber[2],celPhoneNumber[3],celPhoneNumber[4],celPhoneNumber[5],celPhoneNumber[6],celPhoneNumber[7],celPhoneNumber[8],celPhoneNumber[9],celPhoneNumber[10]);
+		sprintf(celPhoneNumber_str,"%d%d%d%d%d%d%d%d%d%d%d",celPhoneNumber[0],celPhoneNumber[1],celPhoneNumber[2],celPhoneNumber[3],celPhoneNumber[4],celPhoneNumber[5],celPhoneNumber[6],celPhoneNumber[7],celPhoneNumber[8],celPhoneNumber[9],celPhoneNumber[10]);
+	}
+	else
+	{
+		sprintf(celPhoneNumber_str,"27988087504");
+		sprintf(buffer,"Error!");
+		SIM900_sendSMS(buffer);
+		Serial1.println("Error!");
+	}
 }
 
 void comm_SIM900()
@@ -1060,6 +1069,8 @@ void comm_SIM900()
 		inChar = Serial2.read();
 		sInstrSIM900[k] = inChar;
 		k++;
+
+//		Serial.write(inChar); // Debug on Serial0.
 
 		if(inChar==';')
 		{
@@ -1234,6 +1245,19 @@ void summary_Print(uint8_t opt)
 			break;
 
 
+			break;
+
+		case 9:
+			sprintf(buffer,"Error!");
+			if(enableSIM900_Send)
+			{
+				enableSIM900_Send = 0;
+				SIM900_sendSMS(buffer);
+			}
+			else
+			{
+				Serial1.println(buffer);
+			}
 			break;
 
 		default:
@@ -1477,7 +1501,7 @@ void handleMessage()
 							aux[0] = sInstr[3];
 							aux[1] = sInstr[4];
 							aux[2] = '\0';
-							timeSectorSet = (uint16_t) 60*atoi(aux);
+							timeSectorSet = 60*((uint16_t) atoi(aux));
 
 						}
 
@@ -1510,32 +1534,42 @@ void handleMessage()
 				break;
 
 			case 7:
-			// 727988081875;
+			// 7:27988081875;
 
+//				if(sInstr[1] == ':')
+//				{
 				int i;
+				uint8_t flag_numError;
+				flag_numError = 0;
+
 				for(i=0;i<11;i++)
 				{
 					aux[0] = '0';
 					aux[1] = sInstr[i+1];
 					aux[2] = '\0';
 					celPhoneNumber[i] = (uint8_t) atoi(aux);
-					eeprom_write_byte(( uint8_t *)(i+23), celPhoneNumber[i]);
+					if(celPhoneNumber[i] >9)
+					{
+						flag_numError = 1;
+					}
 				}
 
-				refreshCelPhoneNumber();
-				summary_Print(2);
+				if(!flag_numError)
+				{
+					for(i=0;i<11;i++)
+					{
+						eeprom_write_byte(( uint8_t *)(i+23), celPhoneNumber[i]);
+					}
+
+					refreshCelPhoneNumber();
+					summary_Print(2);
+				}
+				else
+				{
+					summary_Print(9);
+				}
 
 				break;
-
-//					printTimeSectors();
-
-//					eeprom_update_byte(( uint8_t *)46 , sectorTimeChange);
-
-//					ByteOfData = eeprom_read_byte (( uint8_t *) 46) ;
-
-//					valveInstr(sector, sectorCommand);
-//					sprintf(buffer,"Sector%.2d: [%d], Time: %.2d:%.2d:%.2d,",sector, sectorCommand, tm.Hour, tm.Minute, tm.Second);
-//					Serial1.println(buffer);
 
 			case 8:
 				GLCD.Init();
@@ -1543,7 +1577,7 @@ void handleMessage()
 
 
 			default:
-				summary_Print(9);
+				summary_Print(10);
 				break;
 
 
@@ -1557,22 +1591,22 @@ void summary_GLCD()
 	{
 		flag_summaryGLCD = 0;
 
-		sprintf(buffer_GLCD,"%.2d:%.2d:%.2d, %d/%d/%d",tm.Hour,tm.Minute,tm.Second,tm.Day,tm.Month,tmYearToCalendar(tm.Year));
+		sprintf(buffer,"%.2d:%.2d:%.2d, %d/%d/%d",tm.Hour,tm.Minute,tm.Second,tm.Day,tm.Month,tmYearToCalendar(tm.Year));
 		GLCD.CursorTo(0,0);
-		GLCD.print(buffer_GLCD);
+		GLCD.print(buffer);
 
-		sprintf(buffer_GLCD,"Mode: %d",stateMode);
+		sprintf(buffer,"Mode: %d",stateMode);
 		GLCD.CursorTo(0,2);
-		GLCD.print(buffer_GLCD);
+		GLCD.print(buffer);
 
-		sprintf(buffer_GLCD,"Setor%.2d: %.4d",stateSector, timeSector);
+		sprintf(buffer,"Setor%.2d: %.4d",stateSector, timeSector);
 		GLCD.CursorTo(0,3);
-		GLCD.print(buffer_GLCD);
+		GLCD.print(buffer);
 
 		int I=(int) (1000.0*calcIrms());
-		sprintf(buffer_GLCD,"Is= %d mA",I);
+		sprintf(buffer,"Is= %d mA",I);
 		GLCD.CursorTo(20,4);
-		GLCD.print(buffer_GLCD);
+		GLCD.print(buffer);
 	}
 }
 
