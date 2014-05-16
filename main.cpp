@@ -90,6 +90,7 @@ enum statesMode {
 	manual,
 	programmed,
 	automatic,
+	onlyOneSector,
 	valveTesting
 };
 enum statesMode stateMode = manual;
@@ -107,8 +108,9 @@ enum statesMode stateMode = manual;
 //#define st01 5
 
 //#define Length 3*160.0
-const int Ncycles = 3;
-const int Length = Ncycles*160;		// 3 cycles
+//const int Ncycles = 3;
+//const int Length = Ncycles*160;	// N cycles
+//const int Length = 320;		// 2 cycles
 //const int Length = 480;		// 3 cycles
 //const int Length = 640;		// 4 cycles
 //const int Length = 800;		// 5 cycles
@@ -130,6 +132,7 @@ uint8_t flag_1s;
 //uint8_t flag_SMS = 0;
 //uint8_t flag_valve = 0;
 uint8_t valveOnTest = 0;
+uint8_t onlyValve = 0;
 uint8_t motorStatus = 0;
 uint8_t valveStatus[13] = {0,0,0,0,0,0,0,0,0,0,0,0,0};
 char buffer[180];
@@ -171,8 +174,6 @@ uint8_t enableDecode = 0;
 
 volatile uint8_t flag_30s = 1;
 volatile uint8_t count30s = 0;
-
-
 
 void print2digits(int number)
 {
@@ -287,12 +288,17 @@ void init_ADC()
 	ADMUX &= ~(1<<MUX2);
 	ADMUX &= ~(1<<MUX1);
 	ADMUX &= ~(1<<MUX0);
+
+	ADMUX |=  (1<<REFS0);							// Internal 2.56V reference
+	ADMUX &= ~(1<<REFS1);
 }
 
-float calcIrms()
+float calcIrms_OLD()
 {
 	int i;
 	uint8_t high, low;
+
+	int Length = 160;
 
 //	int adcSamples[Length];
 	int *adcSamples = NULL;
@@ -366,6 +372,121 @@ float calcIrms()
 
 	return I;
 }
+
+float calcIrms()//uint8_t channel)//, uint8_t numberOfCycles)
+{
+	int i;
+	uint8_t high, low;
+	int divScale_count = 0;
+
+	// ADC converter
+	const int divScale = 8;
+	const int numberOfCycles = 10;
+	const float f = 60.0;										// Hertz;
+
+	const float Fs = 16000000/128/13/divScale;					// Sample rate of signal processed;
+	const float nPointsPerCycle = Fs/f;							// Number of points per cycle;
+	const int Length = (int) numberOfCycles*nPointsPerCycle;	// N cycles
+
+//	Serial1.println(f);
+//	Serial1.println(Fs);
+//	Serial1.println(nPointsPerCycle);
+//	Serial1.println(Length);
+//	Serial1.println("");
+
+//	int adcSamples[Length];
+	int *adcSamples = NULL;
+	adcSamples = (int*)malloc(Length * sizeof(int));
+
+//	Serial.print("Declarado: ");
+//	Serial.println(freeMemory());
+
+	// 160.2564 = 16000000/128/13/60.0;
+	for(i=0;i<160*numberOfCycles;i++)
+	{
+		ADCSRA |= (1<<ADSC);				// Start conversion;
+		while (bit_is_set(ADCSRA, ADSC));	// wait until conversion done;
+
+		if(divScale_count == 0)
+		{
+			low  = ADCL;
+			high = ADCH;
+
+			adcSamples[i/divScale] = (high << 8) | low;
+			divScale_count = divScale;
+		}
+		else
+		{
+			divScale_count--;
+		}
+	}
+
+	// Do an ADC conversion
+	for(i=0;i<Length;i++)
+	{
+		ADCSRA |= (1<<ADSC);				// Start conversion;
+		while (bit_is_set(ADCSRA, ADSC));	// wait until conversion done;
+
+		low  = ADCL;
+		high = ADCH;
+
+		adcSamples[i] = (high << 8) | low;
+	}
+
+	float *vs = NULL;
+	vs = (float*)malloc(Length * sizeof(float));
+
+//	for(i=0;i<Length;i++)
+//	{
+//		Serial.println(adcSamples[i]);
+//	}
+
+	for(i=0;i<Length;i++)
+	{
+		vs[i] = (adcSamples[i]*5.0)/1024.0;
+	}
+
+	free(adcSamples);
+
+	// Offset remove.
+	float Vmean = 0.0;
+	for(i=0;i<Length;i++)
+		Vmean += vs[i];
+
+	Vmean = Vmean/Length;
+
+	for(i=0;i<Length;i++)
+		vs[i] = vs[i] - Vmean;
+
+	float *vs2 = NULL;
+	vs2 = (float*)malloc(Length * sizeof(float));
+
+	// Power signal
+	for(i=0;i<Length;i++)
+		vs2[i] = vs[i]*vs[i];
+
+	free(vs);
+
+	float sum=0;
+	float V2mean;
+
+	// mean finder
+	for(i=0;i<Length;i++)
+		sum += vs2[i];
+	V2mean = sum/Length;
+
+	free(vs2);
+
+	float I = 0.0;
+	float k = 2020.0;
+	float R = 310.0;
+
+	// RMS equation
+	I = (k*sqrt(V2mean))/R;
+
+	return I;
+}
+
 
 void motor_start()
 {
@@ -586,12 +707,167 @@ void turnAll_OFF()
 	}
 }
 
+
 uint16_t timeSectorMemory(uint8_t sector)
 {
 	return 60*timeSectorVectorMin[sector-1];
 //	return timeSectorVectorMin[sector-1];
 }
 
+
+void SIM900_sendmail()
+{
+	char *mailCommand = NULL;
+	mailCommand = (char*)malloc(30*sizeof(char));
+
+	sprintf(mailCommand,"AT+EMAILCID=1\r");
+	Serial2.println(mailCommand);
+	delay(10);
+
+	sprintf(mailCommand,"AT+EMAILTO= time_out\r");
+	Serial2.println(mailCommand);
+	delay(10);
+
+	sprintf(mailCommand,"AT+SMTPSRV=\"smtp.mail.yahoo.com.br\",587\r");
+	Serial2.println(mailCommand);
+	delay(10);
+
+	sprintf(mailCommand,"AT+SMTPAUTH=1,\"thmalmeida@yahoo.com.br\",\"c4ch0r4p0dr3\"\r");
+	Serial2.println(mailCommand);
+	delay(10);
+
+	sprintf(mailCommand,"AT+SMTPFROM=\"thmalmeida@yahoo.com.br\",\"Escravo-GPRS\"\r");
+	Serial2.println(mailCommand);
+	delay(10);
+
+	sprintf(mailCommand,"AT+SMTPRCPT=0,0,\"thmalmeida@gmail.com\",\"Thiago\"\r");
+	Serial2.println(mailCommand);
+	delay(10);
+
+	sprintf(mailCommand,"AT+SMTPSUB=\"TEST_GPRS\"\r");
+	Serial2.println(mailCommand);
+	delay(10);
+
+	sprintf(mailCommand,"AT+SMTPBODY\r");
+	Serial2.println(mailCommand);
+	delay(10);
+
+	sprintf(mailCommand,"AT+SMTPRCPT=0,0,\"thmalmeida@gmail.com\",\"Thiago\"\r");
+	Serial2.println(mailCommand);
+	delay(10);
+
+	sprintf(mailCommand,"Acho que funcionou!\r");
+	Serial2.println(mailCommand);
+	delay(10);
+
+	Serial2.println(0x1A,HEX);
+	delay(100);
+
+	sprintf(mailCommand,"AT+SMTPSEND\r");
+	Serial2.println(mailCommand);
+	delay(10);
+}
+void SIM900_GPRS_Connect()
+{
+//	// Setting parameters to GPRS connection
+//	AT+CIPMUX=0		// 0 is a single mode connection.
+//	AT+CIPMODE=0	// 0 - non transparent, 1 - transparent connection.
+//
+//	AT+CPIN?
+//	AT+CSQ			// SNR quality of signal.
+//
+//	AT+CREG?		// Query the GSM network registration status
+//	AT+CGATT?		// whether the module ges been attached to GPRS service.
+//
+//	// How to Establish a GPRS Connection
+//	AT+CSTT="zap.vivo.com.br","vivo","vivo"
+//	AT+CIICR		// Bring Up Wireless Connection with GPRS
+//	AT+CIFSR		// Get Local IP Address
+//	AT+CIPSTATUS=?	// Query Current Connection Status
+//
+//	AT+CIPSHUT		// Disconnect
+//
+//	// How to Establish a TCP Client connection
+//
+//	AT+CIPSTART="TCP","IP address of server","port"
+//
+//	AT+CIPSEND 		// to send text message;
+//	byte 0x1a		// to send.
+//
+//	AT+CIPCLOSE		// Close TCP connection
+//
+//
+//	// How to Establish a TCP Server Connection
+//
+//
+//	AT+CIPSERVER=1,"1234"	// start server and listening port.
+//	"SERVER OK"
+//
+//	AT+CIFSR				// To get local IP address
+//	AT+CIPSEND				// Send data
+//	AT+CIPSERVER=0			// Close the listening status
+//	AT+CIPCLOSE				// Close TCP connection
+
+	char *mailCommand = NULL;
+	mailCommand = (char*)malloc(30*sizeof(char));
+
+	sprintf(mailCommand,"AT+CIPMUX=0\r");
+	Serial2.println(mailCommand);
+	Serial.println(mailCommand);
+	delay(500);
+
+	sprintf(mailCommand,"AT+CIPMODE=0\r");
+	Serial2.println(mailCommand);
+	Serial.println(mailCommand);
+	delay(500);
+
+	sprintf(mailCommand,"AT+CSTT=\"zap.vivo.com.br\",\"vivo\",\"vivo\"\r");
+	Serial2.println(mailCommand);
+	Serial.println(mailCommand);
+	delay(500);
+
+	sprintf(mailCommand,"AT+CIICR\r");
+	Serial2.println(mailCommand);
+	Serial.println(mailCommand);
+	delay(7000);
+
+	sprintf(mailCommand,"AT+CIFSR\r");
+	Serial2.println(mailCommand);
+	Serial.println(mailCommand);
+	delay(300);
+
+	sprintf(mailCommand,"AT+CIPSTATUS=?\r");
+	Serial2.println(mailCommand);
+	Serial.println(mailCommand);
+	delay(300);
+}
+void SIM900_GPRS_Diconnect()
+{
+	char *gprsCommand = NULL;
+	gprsCommand = (char*)malloc(30*sizeof(char));
+
+	sprintf(gprsCommand,"AT+CIPSHUT\r");
+	Serial2.println(gprsCommand);
+}
+void SIM900_TCP_Server_Start()
+{
+	char *tcpServerCommand = NULL;
+	tcpServerCommand = (char*)malloc(30*sizeof(char));
+
+	sprintf(tcpServerCommand,"AT+CIPSERVER=1,\"1234\"\r");
+	Serial2.println(tcpServerCommand);
+	delay(500);
+
+	//	// How to Establish a TCP Server Connection
+	//
+	//	AT+CIPSERVER=1,"1234"	// start server and listening port.
+
+	//	AT+CIPSEND 		// to send text message;
+	//	byte 0x1a		// to send.
+	//
+	//	AT+CIPCLOSE		// Close TCP connection
+
+}
 void SIM900_sendSMS(char *smsbuffer)
 {
 	char *smsCommand = NULL;
@@ -691,6 +967,7 @@ int  SIM900_checkAlive()
 	return r;
 }
 
+
 uint8_t valveTest(uint8_t sector)
 {
 	float I0a=0.0, I0b=0.0, I0c=0.0, Ia=0.0, Ib=0.0, Ic=0.0;
@@ -763,7 +1040,7 @@ void verifyValve()
 //		Serial1.print("Im = ");
 //		Serial1.println(Im);
 
-		if(Im<80)
+		if(Im<45)
 		{
 			sprintf(buffer,"Sistema desligado durante o setor[%.2d]!",stateSector);
 			SIM900_sendSMS(buffer);
@@ -865,6 +1142,56 @@ uint8_t verifyNextValve(uint8_t sector)
 	return nextSector;
 }
 
+
+void process_OnlyOneSector()
+{
+	// 1- Check valve working before start motor
+	if(!motorStatus)
+	{
+		stateSector = verifyNextValve(onlyValve);
+
+		if(stateSector == onlyValve)
+		{
+			valveInstr(stateSector,1);
+			motor_start();
+
+			_delay_ms(200);
+			GLCD.Init();
+
+			flag_sector = 0;
+			flag_timeOVF = 0;
+
+			timeSector = timeSectorSet;
+
+			sprintf(buffer,"Time: %.2d:%.2d:%.2d, %.2d/%.2d/%d \n Sector[%.2d]: ON!",tm.Hour, tm.Minute, tm.Second, tm.Day, tm.Month, tmYearToCalendar(tm.Year), stateSector);
+			SIM900_sendSMS(buffer);
+		}
+		else
+		{
+			Serial1.println("Out of order!");
+			stateMode = manual;
+		}
+
+	}
+
+	// Verifica o proximo setor
+	if(flag_timeOVF)
+	{
+		flag_sector = 0;
+		flag_timeOVF = 0;
+		timeSector = 10;		// Para nao gerar interrupcao e voltar aqui de novo pulando setor
+
+		turnAll_OFF();
+		flag_timeMatch = 0;
+		stateMode = manual;
+
+		sprintf(buffer,"Time: %.2d:%.2d:%.2d, %.2d/%.2d/%d \n Sistema Desligado!",tm.Hour, tm.Minute, tm.Second, tm.Day, tm.Month, tmYearToCalendar(tm.Year));
+		SIM900_sendSMS(buffer);
+	}
+
+	// Check if valve is opened
+	verifyValve();
+}
 void process_Working()
 {
 	// 1- Check valve working before start motor
@@ -912,12 +1239,13 @@ void process_Working()
 		SIM900_sendSMS(buffer);
 	}
 
-	// Verifica o proximo setor
+	// Encerra o processo;
 	if(flag_timeOVF)
 	{
 		flag_sector = 0;
 		flag_timeOVF = 0;
 		timeSector = 10;		// Para nao gerar interrupcao e voltar aqui de novo pulando setor
+
 		stateSector = verifyNextValve(stateSector+1);
 	}
 
@@ -940,7 +1268,12 @@ void process_Programmed()
 
 	if(flag_timeMatch)
 	{
-		process_Working();
+		if(stateMode == onlyOneSector)
+		{
+			process_OnlyOneSector();
+		}
+		else
+			process_Working();
 	}
 	else
 	{
@@ -959,6 +1292,7 @@ void process_valveTest()
 	{
 		sprintf(buffer,"Sector[%.2d]: Ok!",valveOnTest);
 		SIM900_sendSMS(buffer);
+		Serial1.println(buffer);
 
 		stateMode = manual;
 	}
@@ -981,12 +1315,17 @@ void process_Mode()
 			process_Working();
 			break;
 
+		case onlyOneSector:		// Turn on at night only one sector
+			process_Programmed();
+			break;
+
 		case valveTesting:
 			// Automatic Process
 			process_valveTest();
 			break;
 	}
 }
+
 
 void periodVerify0()
 {
@@ -1061,6 +1400,7 @@ void refreshCelPhoneNumber()
 	}
 }
 
+
 void comm_SIM900()
 {
 	// Rx - Always listening
@@ -1070,7 +1410,8 @@ void comm_SIM900()
 		sInstrSIM900[k] = inChar;
 		k++;
 
-//		Serial.write(inChar); // Debug on Serial0.
+		// SIM900 to PC
+		Serial.write(inChar);
 
 		if(inChar==';')
 		{
@@ -1082,10 +1423,16 @@ void comm_SIM900()
 
 		if(!Serial2.available())
 		{
-			Serial.print(sInstrSIM900);
+//			Serial.print(sInstrSIM900);
 			k =0;
 		}
 	}
+
+
+
+	// PC to SIM900
+	while(Serial.available() > 0)
+		Serial2.write(Serial.read());
 
 
 	if(enableTranslate_SIM900)
@@ -1097,12 +1444,14 @@ void comm_SIM900()
 		pf = strchr(sInstrSIM900,';');
 
 		uint8_t l=0;
-		l = pf - pi + 1;
+		l = pf - pi;
+		rLength = l;
 
 		int i;
 		for(i=0;i<l;i++)
 		{
 			sInstr[i] = pi[i+1];
+			Serial1.println(sInstr[i]);
 		}
 
 		enableDecode = 1;
@@ -1111,11 +1460,13 @@ void comm_SIM900()
 }
 void comm_SIM900_SerialPC()
 {
+	// SIM900 to PC
 	while(Serial2.available() > 0)
 		Serial.write(Serial2.read());
 
-//	while(Serial.available() > 0)
-//		Serial2.write(Serial.read());
+	// PC to SIM900
+	while(Serial.available() > 0)
+		Serial2.write(Serial.read());
 }
 void comm_SIM900_Bluetooth()
 {
@@ -1197,6 +1548,7 @@ void comm_Bluetooth()
 		}
 	}
 }
+
 
 void summary_Print(uint8_t opt)
 {
@@ -1296,18 +1648,19 @@ void handleMessage()
 		01;				- Relacao do status das valvulas (ligada ou desligada)
 		02;				- Numero do telefone.
 
-	1123030;		Ajustar a hora
-	201012014;		ajustar a dada
+	1123030;		Ajustar a hora para 12:30:30
+	201042014;		ajustar a data para 01 de abril de 2014
 	31;				ligar (31) ou desligar (30) o motor
 	4s01:1;			acionamento das valvulas
 	5t01:09;		tempo em minutos para cada setor
 	60;				Modo de funcionamento
 		60; 			- Manual
-		61;				- Automatico
-		62;				- Executa automatico 1x
+		61;				- Liga todos os setores em sequencia a noite;
+		62:06;			- Executa automatico 1x por 6 minutos cada setor;
+		63:s01:23;		- Liga a noite somente o setor 1 durante 23 min.
+		69:s03;			- Testa o setor 3 se está funcionando e retorna msg;
 	727988081875;	Troca número de telefone
-
-
+	8;				Reinicializa o GLCD;
 
 */
 
@@ -1316,11 +1669,11 @@ void handleMessage()
 	{
 		enableDecode = 0;
 
-//		int i;
-//		for(i=0;i<rLength;i++)
-//		{
-//			Serial1.println(sInstr[i]);
-//		}
+		int i;
+		for(i=0;i<rLength;i++)
+		{
+			Serial1.println(sInstr[i]);
+		}
 //
 //		for(i=0;i<rLength;i++)
 //		{
@@ -1509,8 +1862,29 @@ void handleMessage()
 
 						break;
 
-					case 3:
-	//				63:s01;
+					case 3:	// Turn on just one sector at night.
+	//				63:s01:30;
+					if((sInstr[2] == ':')&&(sInstr[3] == 's'))
+					{
+						aux[0] = sInstr[4];
+						aux[1] = sInstr[5];
+						aux[2] = '\0';
+						onlyValve = (uint8_t) atoi(aux);
+
+						if(sInstr[6] == ':')
+						{
+							aux[0] = sInstr[7];
+							aux[1] = sInstr[8];
+							aux[2] = '\0';
+							timeSectorSet = 60*((uint16_t) atoi(aux));
+
+							stateMode = onlyOneSector;
+						}
+					}
+					break;
+
+					case 9:	// Testing mode
+	//				69:s01;
 					if((sInstr[2] == ':')&&(sInstr[3] == 's'))
 					{
 						aux[0] = sInstr[4];
@@ -1575,12 +1949,43 @@ void handleMessage()
 				GLCD.Init();
 			break;
 
+			case 9: // internet stuffs
+				// 9x;
+				uint8_t setCommandConnection;
+				aux[0] = '0';
+				aux[1] = sInstr[1];
+				aux[2] = '\0';
+				setCommandConnection = (uint8_t) atoi(aux);
+
+				switch(setCommandConnection)
+				{
+					case 0:
+						Serial1.println("Starting!");
+						SIM900_GPRS_Connect();
+						break;
+
+					case 1:
+						SIM900_GPRS_Diconnect();
+						break;
+
+					case 2:
+						SIM900_TCP_Server_Start();
+						break;
+
+					case 3:
+						SIM900_sendmail();
+						break;
+
+					default:
+						Serial1.println("Comando não implementado!");
+						break;
+				}
+				summary_Print(0);
+				break;
 
 			default:
 				summary_Print(10);
 				break;
-
-
 		}
 	}
 }
@@ -1604,7 +2009,7 @@ void summary_GLCD()
 		GLCD.print(buffer);
 
 		int I=(int) (1000.0*calcIrms());
-		sprintf(buffer,"Is= %d mA",I);
+		sprintf(buffer,"Is= %4d mA",I);
 		GLCD.CursorTo(20,4);
 		GLCD.print(buffer);
 	}
@@ -1660,9 +2065,6 @@ int main()
 
 		// SIM900 <--> uC
 		comm_SIM900();
-
-		// SIM900 <-> Serial PC
-//		comm_SIM900_SerialPC();
 
 		// Bluetooth communication
 		comm_Bluetooth();
