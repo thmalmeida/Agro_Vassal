@@ -123,19 +123,21 @@ enum statesMode stateMode = manual;
 uint8_t flag_motorStart = 0;
 uint8_t timeCounter = 0;
 
-uint8_t sector = 0;
-
 uint16_t timeSectorSet = 4*60;
 volatile uint16_t timeSector = 0;
 uint8_t timeSectorVectorMin[11];
 uint8_t celPhoneNumber[11];
-uint8_t flag_1s;
+uint8_t flag_1s = 0;
+
 //uint8_t flag_SMS = 0;
 //uint8_t flag_valve = 0;
 uint8_t valveOnTest = 0;
 uint8_t onlyValve = 0;
 uint8_t motorStatus = 0;
 uint8_t valveStatus[13] = {0,0,0,0,0,0,0,0,0,0,0,0,0};
+uint8_t sector = 0;
+uint8_t sectorCommand = 0;
+
 char buffer[180];
 
 char c;
@@ -741,12 +743,13 @@ void turnAll_OFF()
 }
 
 
+
+
 uint16_t timeSectorMemory(uint8_t sector)
 {
 	return 60*timeSectorVectorMin[sector-1];
 //	return timeSectorVectorMin[sector-1];
 }
-
 
 void SIM900_sendmail()
 {
@@ -1000,7 +1003,64 @@ int  SIM900_checkAlive()
 	return r;
 }
 
+uint8_t valveInstrSafe(uint8_t sector, uint8_t status)
+{
+	uint8_t statusInstr = 0;
+	float Ia0=0.0, Ib0=0.0, Ic0=0.0, Ia1=0.0, Ib1=0.0, Ic1=0.0;
+	int Im0=0, Im1=0;
 
+
+	// Take a measure before
+	Ia0 = calcIrms();	// Read currently current;
+	_delay_ms(100);
+	Ib0 = calcIrms();	// Read currently current;
+	_delay_ms(100);
+	Ic0 = calcIrms();	// Read currently current;
+	_delay_ms(100);
+
+	Im0 = (int) (1000.0*(Ia0+Ib0+Ic0)/3.0);
+
+	// Set valve instruction
+	valveInstr(sector, status);
+	_delay_ms(1000);
+
+	// Take a measure after turn on
+	Ia1 = calcIrms();	// Read currently current;
+	_delay_ms(100);
+	Ib1 = calcIrms();	// Read currently current;
+	_delay_ms(100);
+	Ic1 = calcIrms();	// Read currently current;
+	_delay_ms(100);
+
+	Im1 = (int) (1000.0*(Ia1+Ib1+Ic1)/3.0);
+
+	if(status)
+	{
+		if(Im1 > ((int) Im0*1.05))
+		{
+			statusInstr = 1;
+		}
+		else
+		{
+			valveInstr(sector,0);
+			statusInstr = 0;
+		}
+	}
+	else
+	{
+		if(Im1 < ((int) Im0*1.05))
+		{
+			statusInstr = 1;
+		}
+		else
+		{
+			valveInstr(sector,1);
+			statusInstr = 0;
+		}
+	}
+
+	return statusInstr;
+}
 uint8_t valveTest(uint8_t sector)
 {
 	float I0a=0.0, I0b=0.0, I0c=0.0, Ia=0.0, Ib=0.0, Ic=0.0;
@@ -1625,7 +1685,30 @@ void summary_Print(uint8_t opt)
 
 			break;
 
+		case 3:
+			sprintf(buffer,"Motor: %d, Time: %.2d:%.2d:%.2d,", motorStatus, tm.Hour, tm.Minute, tm.Second);
+			if(enableSIM900_Send)
+			{
+				enableSIM900_Send = 0;
+				SIM900_sendSMS(buffer);
+			}
+			else
+			{
+				Serial1.println(buffer);
+			}
+			break;
 
+		case 4:
+			sprintf(buffer,"Sector%.2d: [%d], Time: %.2d:%.2d:%.2d,",sector, sectorCommand, tm.Hour, tm.Minute, tm.Second);
+			if(enableSIM900_Send)
+			{
+				enableSIM900_Send = 0;
+				SIM900_sendSMS(buffer);
+			}
+			else
+			{
+				Serial1.println(buffer);
+			}
 			break;
 
 		case 9:
@@ -1800,7 +1883,7 @@ void handleMessage()
 				else
 					motor_stop();
 
-				summary_Print(0);
+				summary_Print(1);
 
 				break;
 
@@ -1812,6 +1895,23 @@ void handleMessage()
 					aux[2] = '\0';
 					sector = (uint8_t) atoi(aux);
 
+					// sInstr[4] == :
+					aux[0] = '0';
+					aux[1] = sInstr[5];
+					aux[2] = '\0';
+					sectorCommand = (uint8_t) atoi(aux);
+
+					valveInstr(sector, sectorCommand);
+
+					summary_Print(4);
+				}
+
+				if(sInstr[1] == 'c')
+				{
+					aux[0] = sInstr[2];
+					aux[1] = sInstr[3];
+					aux[2] = '\0';
+					sector = (uint8_t) atoi(aux);
 
 					uint8_t sectorCommand;
 					// sInstr[4] == :
@@ -1820,9 +1920,12 @@ void handleMessage()
 					aux[2] = '\0';
 					sectorCommand = (uint8_t) atoi(aux);
 
-					valveInstr(sector, sectorCommand);
-					sprintf(buffer,"Sector%.2d: [%d], Time: %.2d:%.2d:%.2d,",sector, sectorCommand, tm.Hour, tm.Minute, tm.Second);
-					Serial1.println(buffer);
+					valveInstrSafe(sector, sectorCommand);
+
+					summary_Print(4);
+
+//					sprintf(buffer,"Sector%.2d: [%d], Time: %.2d:%.2d:%.2d,",sector, sectorCommand, tm.Hour, tm.Minute, tm.Second);
+//					Serial1.println(buffer);
 				}
 				break;
 
@@ -2061,7 +2164,7 @@ ISR(TIMER1_COMPA_vect)
 	flag_summaryGLCD = 1;
 }
 
-
+// TODO 4s01:1; add functionality to verify properly working of sector when activate this
 int main()
 {
 	// Initialize arduino hardware requirements.
