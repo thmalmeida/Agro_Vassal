@@ -137,6 +137,10 @@ uint8_t motorStatus = 0;
 uint8_t valveStatus[13] = {0,0,0,0,0,0,0,0,0,0,0,0,0};
 uint8_t sector = 0;
 uint8_t sectorCommand = 0;
+uint8_t sectorChanged = 0;
+
+uint8_t flag_SIM900_checkAlive = 0;
+uint8_t flag_SIM900_died = 0;
 
 char buffer[180];
 
@@ -173,11 +177,13 @@ char celPhoneNumber_str[20];
 
 uint8_t enableTranslate_BT = 0;
 uint8_t enableTranslate_SIM900 = 0;
+uint8_t enableSIM900_checkAliveCompare = 0;
 uint8_t enableSIM900_Send = 0;
 uint8_t enableDecode = 0;
 
 volatile uint8_t flag_30s = 1;
 volatile uint8_t count30s = 0;
+volatile uint8_t count_SIM900_timeout = 0;
 
 void print2digits(int number)
 {
@@ -938,8 +944,9 @@ void SIM900_power()	// GSM AND GPRS Functions
 	digitalWrite(9,LOW);
 	delay(3000);
 
-	delay(2000);
-	SIM900_sendSMS("SIM900 Turned On!");
+	delay(3000);
+	sprintf(buffer,"SIM900 Turned On!");
+	SIM900_sendSMS(buffer);
 }
 void SIM900_reset()
 {
@@ -1002,6 +1009,22 @@ int  SIM900_checkAlive()
 
 	return r;
 }
+void  SIM900_checkAlive2()
+{
+	if(flag_SIM900_died)
+	{
+		SIM900_power();
+		flag_SIM900_died = 0;
+	}
+	else
+	{
+		Serial2.println("AT");
+		flag_SIM900_checkAlive = 1;
+		count_SIM900_timeout = 0;
+		k = 0;
+	}
+}
+
 
 uint8_t valveInstrSafe(uint8_t sector, uint8_t status)
 {
@@ -1444,7 +1467,7 @@ void refreshVariables()
 {
 	if(flag_30s)
 	{
-		SIM900_checkAlive();
+		SIM900_checkAlive2();
 
 		flag_30s = 0;
 		count30s = 30;
@@ -1454,7 +1477,7 @@ void refreshVariables()
 	{
 		flag_1s = 0;
 
-//		RTC.read(tm);
+		RTC.read(tm);
 		periodVerify0();
 	}
 }
@@ -1518,6 +1541,22 @@ void comm_SIM900()
 			enableTranslate_SIM900 = 1;
 		}
 
+		if(flag_SIM900_checkAlive)
+		{
+			if(inChar=='K')
+			{
+				rLength = k;
+				k = 0;
+
+				enableSIM900_checkAliveCompare = 1;
+				flag_SIM900_checkAlive = 0;
+				count_SIM900_timeout = 0;
+
+//				Serial1.println("K found!");
+			}
+		}
+
+		// System com bug
 		if(!Serial2.available())
 		{
 			Serial.print(sInstrSIM900);
@@ -1525,6 +1564,34 @@ void comm_SIM900()
 		}
 	}
 
+	if(flag_SIM900_checkAlive)
+	{
+		if(count_SIM900_timeout > 5)
+		{
+			flag_SIM900_died = 1;
+			flag_SIM900_checkAlive = 0;
+		}
+	}
+
+	if(enableSIM900_checkAliveCompare)
+	{
+		enableSIM900_checkAliveCompare = 0;
+
+		char *pi2;
+		pi2 = strchr(sInstrSIM900,'O');
+
+		if(pi2[1] == 'K')
+		{
+			flag_SIM900_died = 0;
+//			Serial1.println("Alive!");
+		}
+		else
+		{
+			flag_SIM900_died = 1;
+		}
+
+//		pf2 = strchr(sInstrSIM900,'K');
+	}
 
 	if(enableTranslate_SIM900)
 	{
@@ -1699,7 +1766,7 @@ void summary_Print(uint8_t opt)
 			break;
 
 		case 4:
-			sprintf(buffer,"Sector%.2d: [%d], Time: %.2d:%.2d:%.2d,",sector, sectorCommand, tm.Hour, tm.Minute, tm.Second);
+			sprintf(buffer,"Sector%.2d:%d, changed: %d, Time: %.2d:%.2d:%.2d,",sector,valveStatus[sector-1], sectorChanged, tm.Hour, tm.Minute, tm.Second);
 			if(enableSIM900_Send)
 			{
 				enableSIM900_Send = 0;
@@ -1913,14 +1980,14 @@ void handleMessage()
 					aux[2] = '\0';
 					sector = (uint8_t) atoi(aux);
 
-					uint8_t sectorCommand;
+//					uint8_t sectorCommand;
 					// sInstr[4] == :
 					aux[0] = '0';
 					aux[1] = sInstr[5];
 					aux[2] = '\0';
 					sectorCommand = (uint8_t) atoi(aux);
 
-					valveInstrSafe(sector, sectorCommand);
+					sectorChanged = valveInstrSafe(sector, sectorCommand);
 
 					summary_Print(4);
 
@@ -2150,6 +2217,11 @@ void summary_GLCD()
 
 ISR(TIMER1_COMPA_vect)
 {
+	if(flag_SIM900_checkAlive)
+	{
+		count_SIM900_timeout++;
+	}
+
 	if(!count30s)
 		flag_30s = 1;
 	else
@@ -2164,7 +2236,6 @@ ISR(TIMER1_COMPA_vect)
 	flag_summaryGLCD = 1;
 }
 
-// TODO 4s01:1; add functionality to verify properly working of sector when activate this
 int main()
 {
 	// Initialize arduino hardware requirements.
