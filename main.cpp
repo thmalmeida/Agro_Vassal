@@ -2,12 +2,13 @@
 #include <avr/io.h>
 #include <avr/interrupt.h>
 #include <avr/eeprom.h>
+//#include <avr/wdt.h>
 
 #include <Arduino.h>
 #include <string.h>
 
-#include "fonts/SystemFont5x7.h"       // system font
-#include "glcd.h"    // Graphics LCD library
+#include "fonts/SystemFont5x7.h"	// system font
+#include "glcd.h"    				// Graphics LCD library
 #include "fonts/allFonts.h"
 
 #include "main.h"
@@ -18,12 +19,12 @@
 
 tmElements_t tm;
 
-#define k1_on()		PORTG |=  (1<<5);	// Triac 1 is the starter
-#define k1_off()	PORTG &= ~(1<<5);	// Triac 1 is the starter
-#define k2_on()		PORTE |=  (1<<5);	// Triac 1 is the starter
-#define k2_off()	PORTE &= ~(1<<5);	// Triac 1 is the starter
-#define k3_on()		PORTE |=  (1<<4);
-#define k3_off()	PORTE &= ~(1<<4);
+#define k1_on()		PORTG |=  (1<<5);	// Triac 1 is enabled
+#define k1_off()	PORTG &= ~(1<<5);	// Triac 1 is disabled
+#define k2_on()		PORTE |=  (1<<5);	// Triac 2 is enabled
+#define k2_off()	PORTE &= ~(1<<5);	// Triac 2 is disabled
+#define k3_on()		PORTE |=  (1<<4);	// Triac 3 is enabled
+#define k3_off()	PORTE &= ~(1<<4);	// Triac 3 is disabled
 
 #define s11_on()	PORTC |=  (1<<2);	// S11
 #define s11_off()	PORTC &= ~(1<<2);	// S11
@@ -163,7 +164,8 @@ volatile uint8_t flag_summaryGLCD = 0;
 // Bluetooth variables
 char inChar, aux[3], aux2[5], sInstr[15];
 uint8_t k=0, rLength, opcode;
-char sInstrSIM900[80];
+const int sInstrSIM900_Length = 80;
+char sInstrSIM900[sInstrSIM900_Length];
 char sInstrBluetooth[20];
 char celPhoneNumber_str[20];
 
@@ -291,6 +293,37 @@ void init_ADC()
 
 	ADMUX |=  (1<<REFS0);							// Internal 2.56V reference
 	ADMUX &= ~(1<<REFS1);
+}
+void init_WDT()
+{
+	// Configuring to enable only Reset System if occurs 4 s timeout
+//	WDTCSR <== WDIF WDIE WDP3 WDCE WDE WDP2 WDP1 WDP0
+//	WDTCSR |=  (1<<WDCE) | (1<<WDE);	// Enable Watchdog Timer
+//	WDTCSR &= ~(1<<WDIE);				// Disable interrupt
+//
+//	WDTCSR |=  (1<<WDP3);				// 512k (524288) Cycles, 4.0s
+//	WDTCSR &= ~(1<<WDP2);
+//	WDTCSR &= ~(1<<WDP1);
+//	WDTCSR &= ~(1<<WDP0);
+
+//	WDTCSR |=  (1<<WDCE);
+//	WDTCSR = 0b00111000;
+
+//	wdt_enable(WDTO_8S);
+}
+
+void stop_WDT()
+{
+	cli();
+//	__watchdog_reset();
+	/* Clear WDRF in MCUSR */
+	MCUSR &= ~(1<<WDRF);
+	/* Write logical one to WDCE and WDE */
+	/* Keep old prescaler setting to prevent unintentional time-out */
+	WDTCSR |= (1<<WDCE) | (1<<WDE);
+	/* Turn off WDT */
+	WDTCSR = 0x00;
+	sei();
 }
 
 float calcIrms_OLD()
@@ -875,19 +908,19 @@ void SIM900_sendSMS(char *smsbuffer)
 
 	sprintf(smsCommand,"AT+CMGF=1\r");	//Because we want to send the SMS in text mode
 	Serial2.println(smsCommand);
-	delay(200);
+	delay(100);
 
 	sprintf(smsCommand,"AT+CMGS=\"%s\"",celPhoneNumber_str);
 	Serial2.println(smsCommand);
 
 //	Serial2.println("AT+CMGS=\"27988081875\"");//send sms message, be careful need to add a country code before the cellphone number
-	delay(200);
+	delay(100);
 	Serial2.println(smsbuffer);//the content of the message
 //	SerialGSM.print(buffer_to_send);
 
 	delay(1000);
 	Serial2.println((char)26);//the ASCII code of the ctrl+z is 26
-	delay(2000);
+	delay(250);
 	Serial2.println();
 
 	free(smsCommand);
@@ -916,8 +949,8 @@ int  SIM900_checkAlive()
 	int enableCompare =0, r=0;
 	char str[3];
 
-	Serial2.println("at");
-	_delay_ms(1200);
+	Serial2.println("AT");
+	_delay_ms(250);
 
 	while((Serial2.available()>0))	// Reading from serial
 	{
@@ -1361,7 +1394,7 @@ void refreshVariables()
 	{
 		flag_1s = 0;
 
-		RTC.read(tm);
+//		RTC.read(tm);
 		periodVerify0();
 	}
 }
@@ -1410,8 +1443,12 @@ void comm_SIM900()
 		sInstrSIM900[k] = inChar;
 		k++;
 
-		// SIM900 to PC
-		Serial.write(inChar);
+		if(k>=sInstrSIM900_Length)
+		{
+			k=0;
+			sprintf(buffer,"sIntrSIM900 Overflow!");
+			SIM900_sendSMS(buffer);
+		}
 
 		if(inChar==';')
 		{
@@ -1423,16 +1460,10 @@ void comm_SIM900()
 
 		if(!Serial2.available())
 		{
-//			Serial.print(sInstrSIM900);
+			Serial.print(sInstrSIM900);
 			k =0;
 		}
 	}
-
-
-
-	// PC to SIM900
-	while(Serial.available() > 0)
-		Serial2.write(Serial.read());
 
 
 	if(enableTranslate_SIM900)
@@ -1444,14 +1475,12 @@ void comm_SIM900()
 		pf = strchr(sInstrSIM900,';');
 
 		uint8_t l=0;
-		l = pf - pi;
-		rLength = l;
+		l = pf - pi + 1;
 
 		int i;
 		for(i=0;i<l;i++)
 		{
 			sInstr[i] = pi[i+1];
-			Serial1.println(sInstr[i]);
 		}
 
 		enableDecode = 1;
@@ -1669,12 +1698,11 @@ void handleMessage()
 	{
 		enableDecode = 0;
 
-		int i;
-		for(i=0;i<rLength;i++)
-		{
-			Serial1.println(sInstr[i]);
-		}
-//
+//		int i;
+//		for(i=0;i<rLength;i++)
+//		{
+//			Serial1.println(sInstr[i]);
+//		}
 //		for(i=0;i<rLength;i++)
 //		{
 //			Serial1.println(sInstr[i],HEX);
@@ -1837,6 +1865,8 @@ void handleMessage()
 						stateMode = manual;
 						if(motorStatus)
 						{
+							flag_timeMatch = 0;
+							timeSector = 0;
 							turnAll_OFF();
 							stateSector = 1;
 						}
@@ -2042,6 +2072,7 @@ int main()
 	init_ADC();
 	init_SIM900();
 	init_Timer1_1Hz();
+//	init_WDT();
 
 	GLCD.Init();
 	GLCD.SelectFont(SystemFont5x7);
@@ -2050,13 +2081,24 @@ int main()
 	Serial1.begin(38400);	// Bluetooth
 	Serial2.begin(9600);	// Connected to SIM900
 
+	// Welcome!
 	Serial1.println("- Raiden Controller Started! -");
 
+	sprintf(buffer,"System has Started!");
+	SIM900_sendSMS(buffer);
+
+	// Refresh
 	refreshTimeSectors();
 	refreshCelPhoneNumber();
 
+	// WDT enable
+//	wdt_enable(WDTO_8S);
+
+	// Program comes here
 	while (1)
 	{
+//		wdt_reset();
+
 		// Refrash all variables to compare and take decisions;
 		refreshVariables();
 
