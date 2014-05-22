@@ -334,7 +334,7 @@ void stop_WDT()
 	sei();
 }
 
-float calcIrms_OLD()
+float calcIrms_HQ()
 {
 	int i;
 	uint8_t high, low;
@@ -413,7 +413,6 @@ float calcIrms_OLD()
 
 	return I;
 }
-
 float calcIrms()//uint8_t channel)//, uint8_t numberOfCycles)
 {
 	int i;
@@ -439,9 +438,6 @@ float calcIrms()//uint8_t channel)//, uint8_t numberOfCycles)
 	int *adcSamples = NULL;
 	adcSamples = (int*)malloc(Length * sizeof(int));
 
-//	Serial.print("Declarado: ");
-//	Serial.println(freeMemory());
-
 	// 160.2564 = 16000000/128/13/60.0;
 	for(i=0;i<160*numberOfCycles;i++)
 	{
@@ -460,18 +456,6 @@ float calcIrms()//uint8_t channel)//, uint8_t numberOfCycles)
 		{
 			divScale_count--;
 		}
-	}
-
-	// Do an ADC conversion
-	for(i=0;i<Length;i++)
-	{
-		ADCSRA |= (1<<ADSC);				// Start conversion;
-		while (bit_is_set(ADCSRA, ADSC));	// wait until conversion done;
-
-		low  = ADCL;
-		high = ADCH;
-
-		adcSamples[i] = (high << 8) | low;
 	}
 
 	float *vs = NULL;
@@ -747,8 +731,6 @@ void turnAll_OFF()
 		valveInstr(i,0);
 	}
 }
-
-
 
 
 uint16_t timeSectorMemory(uint8_t sector)
@@ -2273,7 +2255,7 @@ int main()
 	{
 //		wdt_reset();
 
-		// Refrash all variables to compare and take decisions;
+		// Refresh all variables to compare and take decisions;
 		refreshVariables();
 
 		// Main process.
