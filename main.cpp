@@ -142,7 +142,7 @@ uint8_t sectorChanged = 0;
 uint8_t flag_SIM900_checkAlive = 0;
 uint8_t flag_SIM900_died = 0;
 
-char buffer[180];
+char buffer[150];
 
 char c;
 uint8_t flag_sector=1;
@@ -170,8 +170,9 @@ volatile uint8_t flag_summaryGLCD = 0;
 // Bluetooth variables
 char inChar, aux[3], aux2[5], sInstr[15];
 uint8_t k=0, rLength, opcode;
-const int sInstrSIM900_Length = 80;
-char sInstrSIM900[sInstrSIM900_Length];
+const int sInstrSIM900_Length = 70;
+char buf_SIM900[70];
+//char buf_SIM900[sInstrSIM900_Length];
 char sInstrBluetooth[20];
 char celPhoneNumber_str[20];
 
@@ -415,58 +416,102 @@ float calcIrms_HQ()
 }
 float calcIrms()//uint8_t channel)//, uint8_t numberOfCycles)
 {
-	int i;
+	int i, j=0;
 	uint8_t high, low;
-	int divScale_count = 0;
+	int divScale_count = 1;
 
 	// ADC converter
-	const int divScale = 8;
-	const int numberOfCycles = 10;
-	const float f = 60.0;										// Hertz;
+	const float f = 60.0;									// Hertz;
+	const int numberOfCycles = 16;							// Number of cycles;
+	const int divScale = 8;									// Prescale for real sample rate Fs;
 
-	const float Fs = 16000000/128/13/divScale;					// Sample rate of signal processed;
-	const float nPointsPerCycle = Fs/f;							// Number of points per cycle;
-	const int Length = (int) numberOfCycles*nPointsPerCycle;	// N cycles
+	const float Fs = 16000000/128/13;									// Sample rate of signal processed;
+	const int nPointsPerCycle = (int) Fs/f;								// Number of points per cycle;
+	const int nPoints = (int) nPointsPerCycle*numberOfCycles; 			// Number of signal points.
 
-//	Serial1.println(f);
+	const float Fs_div = 16000000/128/13/divScale;						// Sample rate of signal processed;
+	const int nPointsPerCycle_div = (int) Fs_div/f;						// Number of points per cycle;
+	const int nPoints_div = (int) nPointsPerCycle_div*numberOfCycles;	// Number of signal points.
+
+
+//	sprintf(buffer,"---- Signal Captured ----");
+//	Serial1.println(buffer);
+//	Serial1.println("");
+//
+//	Serial1.print("Fs:");
 //	Serial1.println(Fs);
-//	Serial1.println(nPointsPerCycle);
-//	Serial1.println(Length);
+//	Serial1.println("");
+//
+//	sprintf(buffer,", nPointsPerCycle:%d", nPointsPerCycle);
+//	Serial1.println(buffer);
+//	Serial1.println("");
+//
+//	sprintf(buffer,"nPoints:%d", nPoints);
+//	Serial1.println(buffer);
+//	Serial1.println("");
+//
+//
+//
+//	sprintf(buffer,"---- Signal Processed ----");
+//	Serial1.println(buffer);
+//	Serial1.println("");
+//
+//	Serial1.print("Fs:");
+//	Serial1.println(Fs_div);
+//	Serial1.println("");
+//
+//	sprintf(buffer,", nPointsPerCycle:%d", nPointsPerCycle_div);
+//	Serial1.println(buffer);
+//	Serial1.println("");
+//
+//	sprintf(buffer,"nPoints:%d", nPoints_div);
+//	Serial1.println(buffer);
 //	Serial1.println("");
 
-//	int adcSamples[Length];
-	int *adcSamples = NULL;
-	adcSamples = (int*)malloc(Length * sizeof(int));
 
+
+//	int adcSamples[nPoints_div];
+	int *adcSamples = NULL;
+	adcSamples = (int*)malloc(nPoints_div * sizeof(int));
+
+//	Serial.println("ENTROU!");
 	// 160.2564 = 16000000/128/13/60.0;
-	for(i=0;i<160*numberOfCycles;i++)
+	for(i=0;i<nPoints;i++)
 	{
 		ADCSRA |= (1<<ADSC);				// Start conversion;
 		while (bit_is_set(ADCSRA, ADSC));	// wait until conversion done;
 
-		if(divScale_count == 0)
+//		Serial.println((ADCH << 8) | ADCL);
+
+		if(divScale_count == 1)
 		{
 			low  = ADCL;
 			high = ADCH;
 
-			adcSamples[i/divScale] = (high << 8) | low;
+			j = (int) i/divScale;
+			adcSamples[j] = (high << 8) | low;
 			divScale_count = divScale;
+//			Serial1.println(j);
 		}
 		else
 		{
 			divScale_count--;
 		}
 	}
+//	Serial.println("SAIU!");
 
-	float *vs = NULL;
-	vs = (float*)malloc(Length * sizeof(float));
-
-//	for(i=0;i<Length;i++)
+//	Serial.println("ENTROU!");
+//	for(i=0;i<nPoints_div;i++)
 //	{
 //		Serial.println(adcSamples[i]);
 //	}
+//	Serial.println("SAIU!");
 
-	for(i=0;i<Length;i++)
+
+	float *vs = NULL;
+	vs = (float*)malloc(nPoints_div * sizeof(float));
+
+	for(i=0;i<nPoints_div;i++)
 	{
 		vs[i] = (adcSamples[i]*5.0)/1024.0;
 	}
@@ -475,19 +520,19 @@ float calcIrms()//uint8_t channel)//, uint8_t numberOfCycles)
 
 	// Offset remove.
 	float Vmean = 0.0;
-	for(i=0;i<Length;i++)
+	for(i=0;i<nPoints_div;i++)
 		Vmean += vs[i];
 
-	Vmean = Vmean/Length;
+	Vmean = Vmean/nPoints_div;
 
-	for(i=0;i<Length;i++)
+	for(i=0;i<nPoints_div;i++)
 		vs[i] = vs[i] - Vmean;
 
 	float *vs2 = NULL;
-	vs2 = (float*)malloc(Length * sizeof(float));
+	vs2 = (float*)malloc(nPoints_div * sizeof(float));
 
 	// Power signal
-	for(i=0;i<Length;i++)
+	for(i=0;i<nPoints_div;i++)
 		vs2[i] = vs[i]*vs[i];
 
 	free(vs);
@@ -496,9 +541,9 @@ float calcIrms()//uint8_t channel)//, uint8_t numberOfCycles)
 	float V2mean;
 
 	// mean finder
-	for(i=0;i<Length;i++)
+	for(i=0;i<nPoints_div;i++)
 		sum += vs2[i];
-	V2mean = sum/Length;
+	V2mean = sum/nPoints_div;
 
 	free(vs2);
 
@@ -739,182 +784,205 @@ uint16_t timeSectorMemory(uint8_t sector)
 //	return timeSectorVectorMin[sector-1];
 }
 
-void SIM900_sendmail()
+//void SIM900_sendmail()
+//{
+//	char *mailCommand = NULL;
+//	mailCommand = (char*)malloc(30*sizeof(char));
+//
+//	sprintf(mailCommand,"AT+EMAILCID=1\r");
+//	Serial2.println(mailCommand);
+//	delay(10);
+//
+//	sprintf(mailCommand,"AT+EMAILTO= time_out\r");
+//	Serial2.println(mailCommand);
+//	delay(10);
+//
+//	sprintf(mailCommand,"AT+SMTPSRV=\"smtp.mail.yahoo.com.br\",587\r");
+//	Serial2.println(mailCommand);
+//	delay(10);
+//
+//	sprintf(mailCommand,"AT+SMTPAUTH=1,\"thmalmeida@yahoo.com.br\",\"c4ch0r4p0dr3\"\r");
+//	Serial2.println(mailCommand);
+//	delay(10);
+//
+//	sprintf(mailCommand,"AT+SMTPFROM=\"thmalmeida@yahoo.com.br\",\"Escravo-GPRS\"\r");
+//	Serial2.println(mailCommand);
+//	delay(10);
+//
+//	sprintf(mailCommand,"AT+SMTPRCPT=0,0,\"thmalmeida@gmail.com\",\"Thiago\"\r");
+//	Serial2.println(mailCommand);
+//	delay(10);
+//
+//	sprintf(mailCommand,"AT+SMTPSUB=\"TEST_GPRS\"\r");
+//	Serial2.println(mailCommand);
+//	delay(10);
+//
+//	sprintf(mailCommand,"AT+SMTPBODY\r");
+//	Serial2.println(mailCommand);
+//	delay(10);
+//
+//	sprintf(mailCommand,"AT+SMTPRCPT=0,0,\"thmalmeida@gmail.com\",\"Thiago\"\r");
+//	Serial2.println(mailCommand);
+//	delay(10);
+//
+//	sprintf(mailCommand,"Acho que funcionou!\r");
+//	Serial2.println(mailCommand);
+//	delay(10);
+//
+//	Serial2.println(0x1A,HEX);
+//	delay(100);
+//
+//	sprintf(mailCommand,"AT+SMTPSEND\r");
+//	Serial2.println(mailCommand);
+//	delay(10);
+//}
+//void SIM900_GPRS_Connect()
+//{
+////	// Setting parameters to GPRS connection
+////	AT+CIPMUX=0		// 0 is a single mode connection.
+////	AT+CIPMODE=0	// 0 - non transparent, 1 - transparent connection.
+////
+////	AT+CPIN?
+////	AT+CSQ			// SNR quality of signal.
+////
+////	AT+CREG?		// Query the GSM network registration status
+////	AT+CGATT?		// whether the module ges been attached to GPRS service.
+////
+////	// How to Establish a GPRS Connection
+////	AT+CSTT="zap.vivo.com.br","vivo","vivo"
+////	AT+CIICR		// Bring Up Wireless Connection with GPRS
+////	AT+CIFSR		// Get Local IP Address
+////	AT+CIPSTATUS=?	// Query Current Connection Status
+////
+////	AT+CIPSHUT		// Disconnect
+////
+////	// How to Establish a TCP Client connection
+////
+////	AT+CIPSTART="TCP","IP address of server","port"
+////
+////	AT+CIPSEND 		// to send text message;
+////	byte 0x1a		// to send.
+////
+////	AT+CIPCLOSE		// Close TCP connection
+////
+////
+////	// How to Establish a TCP Server Connection
+////
+////
+////	AT+CIPSERVER=1,"1234"	// start server and listening port.
+////	"SERVER OK"
+////
+////	AT+CIFSR				// To get local IP address
+////	AT+CIPSEND				// Send data
+////	AT+CIPSERVER=0			// Close the listening status
+////	AT+CIPCLOSE				// Close TCP connection
+//
+//	char *mailCommand = NULL;
+//	mailCommand = (char*)malloc(30*sizeof(char));
+//
+//	sprintf(mailCommand,"AT+CIPMUX=0\r");
+//	Serial2.println(mailCommand);
+//	Serial.println(mailCommand);
+//	delay(500);
+//
+//	sprintf(mailCommand,"AT+CIPMODE=0\r");
+//	Serial2.println(mailCommand);
+//	Serial.println(mailCommand);
+//	delay(500);
+//
+//	sprintf(mailCommand,"AT+CSTT=\"zap.vivo.com.br\",\"vivo\",\"vivo\"\r");
+//	Serial2.println(mailCommand);
+//	Serial.println(mailCommand);
+//	delay(500);
+//
+//	sprintf(mailCommand,"AT+CIICR\r");
+//	Serial2.println(mailCommand);
+//	Serial.println(mailCommand);
+//	delay(7000);
+//
+//	sprintf(mailCommand,"AT+CIFSR\r");
+//	Serial2.println(mailCommand);
+//	Serial.println(mailCommand);
+//	delay(300);
+//
+//	sprintf(mailCommand,"AT+CIPSTATUS=?\r");
+//	Serial2.println(mailCommand);
+//	Serial.println(mailCommand);
+//	delay(300);
+//}
+//void SIM900_GPRS_Diconnect()
+//{
+//	char *gprsCommand = NULL;
+//	gprsCommand = (char*)malloc(30*sizeof(char));
+//
+//	sprintf(gprsCommand,"AT+CIPSHUT\r");
+//	Serial2.println(gprsCommand);
+//}
+//void SIM900_TCP_Server_Start()
+//{
+//	char *tcpServerCommand = NULL;
+//	tcpServerCommand = (char*)malloc(30*sizeof(char));
+//
+//	sprintf(tcpServerCommand,"AT+CIPSERVER=1,\"1234\"\r");
+//	Serial2.println(tcpServerCommand);
+//	delay(500);
+//
+//	//	// How to Establish a TCP Server Connection
+//	//
+//	//	AT+CIPSERVER=1,"1234"	// start server and listening port.
+//
+//	//	AT+CIPSEND 		// to send text message;
+//	//	byte 0x1a		// to send.
+//	//
+//	//	AT+CIPCLOSE		// Close TCP connection
+//
+//}
+void SIM900_sendSMS_OLD(char *smsbuffer)
 {
-	char *mailCommand = NULL;
-	mailCommand = (char*)malloc(30*sizeof(char));
+//	char *smsCommand = NULL;
+//	smsCommand = (char*)malloc(30*sizeof(char));
 
-	sprintf(mailCommand,"AT+EMAILCID=1\r");
-	Serial2.println(mailCommand);
-	delay(10);
+//	sprintf(smsCommand,"AT+CMGF=1\r");	//Because we want to send the SMS in text mode
+//	Serial2.println(smsCommand);
+	Serial2.println("AT+CMGF=1\r");
+	delay(250);
 
-	sprintf(mailCommand,"AT+EMAILTO= time_out\r");
-	Serial2.println(mailCommand);
-	delay(10);
-
-	sprintf(mailCommand,"AT+SMTPSRV=\"smtp.mail.yahoo.com.br\",587\r");
-	Serial2.println(mailCommand);
-	delay(10);
-
-	sprintf(mailCommand,"AT+SMTPAUTH=1,\"thmalmeida@yahoo.com.br\",\"c4ch0r4p0dr3\"\r");
-	Serial2.println(mailCommand);
-	delay(10);
-
-	sprintf(mailCommand,"AT+SMTPFROM=\"thmalmeida@yahoo.com.br\",\"Escravo-GPRS\"\r");
-	Serial2.println(mailCommand);
-	delay(10);
-
-	sprintf(mailCommand,"AT+SMTPRCPT=0,0,\"thmalmeida@gmail.com\",\"Thiago\"\r");
-	Serial2.println(mailCommand);
-	delay(10);
-
-	sprintf(mailCommand,"AT+SMTPSUB=\"TEST_GPRS\"\r");
-	Serial2.println(mailCommand);
-	delay(10);
-
-	sprintf(mailCommand,"AT+SMTPBODY\r");
-	Serial2.println(mailCommand);
-	delay(10);
-
-	sprintf(mailCommand,"AT+SMTPRCPT=0,0,\"thmalmeida@gmail.com\",\"Thiago\"\r");
-	Serial2.println(mailCommand);
-	delay(10);
-
-	sprintf(mailCommand,"Acho que funcionou!\r");
-	Serial2.println(mailCommand);
-	delay(10);
-
-	Serial2.println(0x1A,HEX);
-	delay(100);
-
-	sprintf(mailCommand,"AT+SMTPSEND\r");
-	Serial2.println(mailCommand);
-	delay(10);
-}
-void SIM900_GPRS_Connect()
-{
-//	// Setting parameters to GPRS connection
-//	AT+CIPMUX=0		// 0 is a single mode connection.
-//	AT+CIPMODE=0	// 0 - non transparent, 1 - transparent connection.
-//
-//	AT+CPIN?
-//	AT+CSQ			// SNR quality of signal.
-//
-//	AT+CREG?		// Query the GSM network registration status
-//	AT+CGATT?		// whether the module ges been attached to GPRS service.
-//
-//	// How to Establish a GPRS Connection
-//	AT+CSTT="zap.vivo.com.br","vivo","vivo"
-//	AT+CIICR		// Bring Up Wireless Connection with GPRS
-//	AT+CIFSR		// Get Local IP Address
-//	AT+CIPSTATUS=?	// Query Current Connection Status
-//
-//	AT+CIPSHUT		// Disconnect
-//
-//	// How to Establish a TCP Client connection
-//
-//	AT+CIPSTART="TCP","IP address of server","port"
-//
-//	AT+CIPSEND 		// to send text message;
-//	byte 0x1a		// to send.
-//
-//	AT+CIPCLOSE		// Close TCP connection
-//
-//
-//	// How to Establish a TCP Server Connection
-//
-//
-//	AT+CIPSERVER=1,"1234"	// start server and listening port.
-//	"SERVER OK"
-//
-//	AT+CIFSR				// To get local IP address
-//	AT+CIPSEND				// Send data
-//	AT+CIPSERVER=0			// Close the listening status
-//	AT+CIPCLOSE				// Close TCP connection
-
-	char *mailCommand = NULL;
-	mailCommand = (char*)malloc(30*sizeof(char));
-
-	sprintf(mailCommand,"AT+CIPMUX=0\r");
-	Serial2.println(mailCommand);
-	Serial.println(mailCommand);
-	delay(500);
-
-	sprintf(mailCommand,"AT+CIPMODE=0\r");
-	Serial2.println(mailCommand);
-	Serial.println(mailCommand);
-	delay(500);
-
-	sprintf(mailCommand,"AT+CSTT=\"zap.vivo.com.br\",\"vivo\",\"vivo\"\r");
-	Serial2.println(mailCommand);
-	Serial.println(mailCommand);
-	delay(500);
-
-	sprintf(mailCommand,"AT+CIICR\r");
-	Serial2.println(mailCommand);
-	Serial.println(mailCommand);
-	delay(7000);
-
-	sprintf(mailCommand,"AT+CIFSR\r");
-	Serial2.println(mailCommand);
-	Serial.println(mailCommand);
-	delay(300);
-
-	sprintf(mailCommand,"AT+CIPSTATUS=?\r");
-	Serial2.println(mailCommand);
-	Serial.println(mailCommand);
-	delay(300);
-}
-void SIM900_GPRS_Diconnect()
-{
-	char *gprsCommand = NULL;
-	gprsCommand = (char*)malloc(30*sizeof(char));
-
-	sprintf(gprsCommand,"AT+CIPSHUT\r");
-	Serial2.println(gprsCommand);
-}
-void SIM900_TCP_Server_Start()
-{
-	char *tcpServerCommand = NULL;
-	tcpServerCommand = (char*)malloc(30*sizeof(char));
-
-	sprintf(tcpServerCommand,"AT+CIPSERVER=1,\"1234\"\r");
-	Serial2.println(tcpServerCommand);
-	delay(500);
-
-	//	// How to Establish a TCP Server Connection
-	//
-	//	AT+CIPSERVER=1,"1234"	// start server and listening port.
-
-	//	AT+CIPSEND 		// to send text message;
-	//	byte 0x1a		// to send.
-	//
-	//	AT+CIPCLOSE		// Close TCP connection
-
-}
-void SIM900_sendSMS(char *smsbuffer)
-{
-	char *smsCommand = NULL;
-	smsCommand = (char*)malloc(30*sizeof(char));
-
-	sprintf(smsCommand,"AT+CMGF=1\r");	//Because we want to send the SMS in text mode
-	Serial2.println(smsCommand);
-	delay(100);
-
-	sprintf(smsCommand,"AT+CMGS=\"%s\"",celPhoneNumber_str);
-	Serial2.println(smsCommand);
-
-//	Serial2.println("AT+CMGS=\"27988081875\"");//send sms message, be careful need to add a country code before the cellphone number
-	delay(100);
+//	sprintf(smsCommand,"AT+CMGS=\"%s\"",celPhoneNumber_str);
+//	Serial2.println(smsCommand);
+	Serial2.println("AT+CMGS=\"27988081875\"");//send sms message, be careful need to add a country code before the cellphone number
+	delay(250);
 	Serial2.println(smsbuffer);//the content of the message
-//	SerialGSM.print(buffer_to_send);
 
 	delay(1000);
 	Serial2.println((char)26);//the ASCII code of the ctrl+z is 26
 	delay(250);
 	Serial2.println();
 
-	free(smsCommand);
+//	free(smsCommand);
+}
+void SIM900_sendSMS(char *smsbuffer)
+{
+	Serial2.println("AT+CMGF=1\r");
+	delay(250);
+
+	Serial2.println("AT+CMGS=\"27988081875\"");//send sms message, be careful need to add a country code before the cellphone number
+	delay(250);
+
+	Serial2.println(smsbuffer);//the content of the message
+	delay(1000);
+
+	Serial2.println((char)26);//the ASCII code of the ctrl+z is 26
+	delay(250);
+
+	Serial2.println();
+
+
+//	char *smsCommand = NULL;
+//	smsCommand = (char*)malloc(30*sizeof(char));
+//	sprintf(smsCommand,"AT+CMGS=\"%s\"",celPhoneNumber_str);
+//	Serial2.println(smsCommand);
+
+//	free(smsCommand);
 }
 void SIM900_power()	// GSM AND GPRS Functions
 {
@@ -936,7 +1004,24 @@ void SIM900_reset()
 	_delay_ms(20);
 	PORTH &= ~(1<<PH5);
 }
-int  SIM900_checkAlive()
+void  SIM900_checkAlive()
+{
+	if(flag_SIM900_died)
+	{
+		SIM900_power();
+		flag_SIM900_died = 0;
+	}
+	else
+	{
+		Serial2.println("AT");
+		_delay_ms(250);
+
+		flag_SIM900_checkAlive = 1;
+		count_SIM900_timeout = 0;
+//		k = 0;
+	}
+}
+int  SIM900_checkAlive2()
 {
 	int enableCompare =0, r=0;
 	char str[3];
@@ -947,7 +1032,7 @@ int  SIM900_checkAlive()
 	while((Serial2.available()>0))	// Reading from serial
 	{
 		inChar = Serial2.read();
-		sInstrSIM900[k] = inChar;
+		buf_SIM900[k] = inChar;
 		k++;
 
 		if(inChar=='K')
@@ -959,7 +1044,7 @@ int  SIM900_checkAlive()
 
 		if(!Serial2.available())
 		{
-//			Serial.print(sInstrSIM900);
+//			Serial.print(buf_SIM900);
 			k =0;
 		}
 	}
@@ -969,7 +1054,7 @@ int  SIM900_checkAlive()
 		enableCompare = 0;
 
 		char *p;
-		p = strchr(sInstrSIM900,'O');
+		p = strchr(buf_SIM900,'O');
 
 		str[0] = p[0];
 		str[1] = p[1];
@@ -990,21 +1075,6 @@ int  SIM900_checkAlive()
 	}
 
 	return r;
-}
-void  SIM900_checkAlive2()
-{
-	if(flag_SIM900_died)
-	{
-		SIM900_power();
-		flag_SIM900_died = 0;
-	}
-	else
-	{
-		Serial2.println("AT");
-		flag_SIM900_checkAlive = 1;
-		count_SIM900_timeout = 0;
-		k = 0;
-	}
 }
 
 
@@ -1449,10 +1519,10 @@ void refreshVariables()
 {
 	if(flag_30s)
 	{
-		SIM900_checkAlive2();
-
 		flag_30s = 0;
 		count30s = 30;
+
+		SIM900_checkAlive();
 	}
 
 	if (flag_1s)
@@ -1505,45 +1575,76 @@ void comm_SIM900()
 	while((Serial2.available()>0))	// Reading from serial
 	{
 		inChar = Serial2.read();
-		sInstrSIM900[k] = inChar;
+		buf_SIM900[k] = inChar;
 		k++;
+		Serial.write(inChar);
 
-		if(k>=sInstrSIM900_Length)
+//		if(k>=sInstrSIM900_Length)
+//		{
+//			k=0;
+//			memset(&buf_SIM900, 0, sInstrSIM900_Length);
+//			sprintf(buffer,"sIntrSIM900 Overflow!");
+//			SIM900_sendSMS(buffer);
+//		}
+
+		if(!flag_SIM900_checkAlive)
 		{
-			k=0;
-			sprintf(buffer,"sIntrSIM900 Overflow!");
-			SIM900_sendSMS(buffer);
+			if(inChar==';')
+			{
+				enableTranslate_SIM900 = 1;
+				k = 0;
+				Serial.println(buf_SIM900);
+			}
 		}
-
-		if(inChar==';')
-		{
-			rLength = k;
-			k = 0;
-
-			enableTranslate_SIM900 = 1;
-		}
-
-		if(flag_SIM900_checkAlive)
+		else
 		{
 			if(inChar=='K')
 			{
-				rLength = k;
-				k = 0;
-
 				enableSIM900_checkAliveCompare = 1;
 				flag_SIM900_checkAlive = 0;
 				count_SIM900_timeout = 0;
-
-//				Serial1.println("K found!");
+				k = 0;
 			}
 		}
 
-		// System com bug
-		if(!Serial2.available())
+		// System with bug
+//		if(!Serial2.available())
+//		{
+//			k = 0;
+//		}
+	}
+
+	// PC to SIM900
+	while(Serial.available() > 0)
+		Serial2.write(Serial.read());
+
+
+
+
+	// Special Functions ------------------------------
+	if(enableTranslate_SIM900)
+	{
+		Serial.println("enableTranslate_SIM900 = 1");
+		enableTranslate_SIM900 = 0;
+
+		char *pi, *pf;
+		pi = strchr(buf_SIM900,'$');
+		pf = strchr(buf_SIM900,';');
+
+		uint8_t l=0;
+		l = pf - pi;
+
+		int i;
+		for(i=1;i<=l;i++)
 		{
-			Serial.print(sInstrSIM900);
-			k =0;
+			sInstr[i-1] = pi[i];
+//			Serial.write(sInstr[i-1]);
 		}
+		Serial.println(sInstr);
+		memset(&buf_SIM900, 0, sInstrSIM900_Length);
+
+		enableDecode = 1;
+		enableSIM900_Send = 1;
 	}
 
 	if(flag_SIM900_checkAlive)
@@ -1552,6 +1653,7 @@ void comm_SIM900()
 		{
 			flag_SIM900_died = 1;
 			flag_SIM900_checkAlive = 0;
+//			Serial.println("SIM900 Check Alive TIMEOUT!");
 		}
 	}
 
@@ -1559,41 +1661,22 @@ void comm_SIM900()
 	{
 		enableSIM900_checkAliveCompare = 0;
 
-		char *pi2;
-		pi2 = strchr(sInstrSIM900,'O');
+		char *p;
+		p = strchr(buf_SIM900,'O');
 
-		if(pi2[1] == 'K')
+		if(p[0] == 'O' && p[1] == 'K')
 		{
 			flag_SIM900_died = 0;
-//			Serial1.println("Alive!");
+//			Serial.println("Alive!");
+//			Serial.println(buf_SIM900);
+//			Serial.println("Alive!");
 		}
 		else
 		{
-			flag_SIM900_died = 1;
+//			Serial.println("Is DEAD??");
+//			flag_SIM900_died = 1;
 		}
-
-//		pf2 = strchr(sInstrSIM900,'K');
-	}
-
-	if(enableTranslate_SIM900)
-	{
-		enableTranslate_SIM900 = 0;
-
-		char *pi, *pf;
-		pi = strchr(sInstrSIM900,'$');
-		pf = strchr(sInstrSIM900,';');
-
-		uint8_t l=0;
-		l = pf - pi + 1;
-
-		int i;
-		for(i=0;i<l;i++)
-		{
-			sInstr[i] = pi[i+1];
-		}
-
-		enableDecode = 1;
-		enableSIM900_Send = 1;
+		memset(&buf_SIM900, 0, sInstrSIM900_Length);
 	}
 }
 void comm_SIM900_SerialPC()
@@ -2143,19 +2226,19 @@ void handleMessage()
 				{
 					case 0:
 						Serial1.println("Starting!");
-						SIM900_GPRS_Connect();
+//						SIM900_GPRS_Connect();
 						break;
 
 					case 1:
-						SIM900_GPRS_Diconnect();
+//						SIM900_GPRS_Diconnect();
 						break;
 
 					case 2:
-						SIM900_TCP_Server_Start();
+//						SIM900_TCP_Server_Start();
 						break;
 
 					case 3:
-						SIM900_sendmail();
+//						SIM900_sendmail();
 						break;
 
 					default:
@@ -2169,6 +2252,8 @@ void handleMessage()
 				summary_Print(10);
 				break;
 		}
+
+		memset(&sInstr, 0, sizeof(sInstr));
 	}
 }
 
@@ -2191,7 +2276,7 @@ void summary_GLCD()
 		GLCD.print(buffer);
 
 		int I=(int) (1000.0*calcIrms());
-		sprintf(buffer,"Is= %4d mA",I);
+		sprintf(buffer,"Is= %4.d mA",I);
 		GLCD.CursorTo(20,4);
 		GLCD.print(buffer);
 	}
@@ -2240,9 +2325,6 @@ int main()
 	// Welcome!
 	Serial1.println("- Raiden Controller Started! -");
 
-	sprintf(buffer,"System has Started!");
-	SIM900_sendSMS(buffer);
-
 	// Refresh
 	refreshTimeSectors();
 	refreshCelPhoneNumber();
@@ -2260,6 +2342,9 @@ int main()
 
 		// Main process.
 		process_Mode();
+
+		// SIM900 <--> uC
+//		comm_SIM900_SerialPC();
 
 		// SIM900 <--> uC
 		comm_SIM900();
