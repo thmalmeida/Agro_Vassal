@@ -170,9 +170,9 @@ volatile uint8_t flag_summaryGLCD = 0;
 // Bluetooth variables
 char inChar, aux[3], aux2[5], sInstr[15];
 uint8_t k=0, rLength, opcode;
-const int sInstrSIM900_Length = 70;
-char buf_SIM900[70];
-//char buf_SIM900[sInstrSIM900_Length];
+const int sInstrSIM900_Length = 200;
+char sInstrSIM900[sInstrSIM900_Length];
+//char sInstrSIM900[sInstrSIM900_Length];
 char sInstrBluetooth[20];
 char celPhoneNumber_str[20];
 
@@ -1032,7 +1032,7 @@ int  SIM900_checkAlive2()
 	while((Serial2.available()>0))	// Reading from serial
 	{
 		inChar = Serial2.read();
-		buf_SIM900[k] = inChar;
+		sInstrSIM900[k] = inChar;
 		k++;
 
 		if(inChar=='K')
@@ -1044,7 +1044,7 @@ int  SIM900_checkAlive2()
 
 		if(!Serial2.available())
 		{
-//			Serial.print(buf_SIM900);
+//			Serial.print(sInstrSIM900);
 			k =0;
 		}
 	}
@@ -1054,7 +1054,7 @@ int  SIM900_checkAlive2()
 		enableCompare = 0;
 
 		char *p;
-		p = strchr(buf_SIM900,'O');
+		p = strchr(sInstrSIM900,'O');
 
 		str[0] = p[0];
 		str[1] = p[1];
@@ -1522,7 +1522,7 @@ void refreshVariables()
 		flag_30s = 0;
 		count30s = 30;
 
-		SIM900_checkAlive();
+//		SIM900_checkAlive();
 	}
 
 	if (flag_1s)
@@ -1575,51 +1575,49 @@ void comm_SIM900()
 	while((Serial2.available()>0))	// Reading from serial
 	{
 		inChar = Serial2.read();
-		buf_SIM900[k] = inChar;
+		sInstrSIM900[k] = inChar;
 		k++;
-		Serial.write(inChar);
 
-//		if(k>=sInstrSIM900_Length)
+		if(k>=sInstrSIM900_Length)
+		{
+			memset(sInstrSIM900,0,sizeof(sInstrSIM900));
+			k=0;
+			Serial.println("ZEROU! SIM900 BUFFER!");
+		}
+//		Serial.write(inChar);
+		memset(buffer,0,sizeof(buffer));
+		sprintf(buffer,"K= %d",k);
+		Serial.println(buffer);
+
+
+		if(inChar==';')
+		{
+			enableTranslate_SIM900 = 1;
+			k = 0;
+			Serial.println(sInstrSIM900);
+		}
+
+//		if(flag_SIM900_checkAlive)
 //		{
-//			k=0;
-//			memset(&buf_SIM900, 0, sInstrSIM900_Length);
-//			sprintf(buffer,"sIntrSIM900 Overflow!");
-//			SIM900_sendSMS(buffer);
+//			if(inChar=='K')
+//			{
+//				enableSIM900_checkAliveCompare = 1;
+//				flag_SIM900_checkAlive = 0;
+//				count_SIM900_timeout = 0;
+//				k = 0;
+//			}
 //		}
 
-		if(!flag_SIM900_checkAlive)
-		{
-			if(inChar==';')
-			{
-				enableTranslate_SIM900 = 1;
-				k = 0;
-				Serial.println(buf_SIM900);
-			}
-		}
-		else
-		{
-			if(inChar=='K')
-			{
-				enableSIM900_checkAliveCompare = 1;
-				flag_SIM900_checkAlive = 0;
-				count_SIM900_timeout = 0;
-				k = 0;
-			}
-		}
-
-		// System with bug
+//		System with bug
 //		if(!Serial2.available())
 //		{
 //			k = 0;
 //		}
 	}
 
-	// PC to SIM900
+//	// PC to SIM900
 	while(Serial.available() > 0)
 		Serial2.write(Serial.read());
-
-
-
 
 	// Special Functions ------------------------------
 	if(enableTranslate_SIM900)
@@ -1628,8 +1626,8 @@ void comm_SIM900()
 		enableTranslate_SIM900 = 0;
 
 		char *pi, *pf;
-		pi = strchr(buf_SIM900,'$');
-		pf = strchr(buf_SIM900,';');
+		pi = strchr(sInstrSIM900,'$');
+		pf = strchr(sInstrSIM900,';');
 
 		uint8_t l=0;
 		l = pf - pi;
@@ -1641,43 +1639,43 @@ void comm_SIM900()
 //			Serial.write(sInstr[i-1]);
 		}
 		Serial.println(sInstr);
-		memset(&buf_SIM900, 0, sInstrSIM900_Length);
+//		memset(sInstrSIM900, 0, sInstrSIM900_Length);
 
 		enableDecode = 1;
 		enableSIM900_Send = 1;
 	}
 
-	if(flag_SIM900_checkAlive)
-	{
-		if(count_SIM900_timeout > 5)
-		{
-			flag_SIM900_died = 1;
-			flag_SIM900_checkAlive = 0;
-//			Serial.println("SIM900 Check Alive TIMEOUT!");
-		}
-	}
-
-	if(enableSIM900_checkAliveCompare)
-	{
-		enableSIM900_checkAliveCompare = 0;
-
-		char *p;
-		p = strchr(buf_SIM900,'O');
-
-		if(p[0] == 'O' && p[1] == 'K')
-		{
-			flag_SIM900_died = 0;
-//			Serial.println("Alive!");
-//			Serial.println(buf_SIM900);
-//			Serial.println("Alive!");
-		}
-		else
-		{
-//			Serial.println("Is DEAD??");
+//	if(flag_SIM900_checkAlive)
+//	{
+//		if(count_SIM900_timeout > 5)
+//		{
 //			flag_SIM900_died = 1;
-		}
-		memset(&buf_SIM900, 0, sInstrSIM900_Length);
-	}
+//			flag_SIM900_checkAlive = 0;
+////			Serial.println("SIM900 Check Alive TIMEOUT!");
+//		}
+//	}
+
+//	if(enableSIM900_checkAliveCompare)
+//	{
+//		enableSIM900_checkAliveCompare = 0;
+//
+//		char *p;
+//		p = strchr(sInstrSIM900,'O');
+//
+//		if(p[0] == 'O' && p[1] == 'K')
+//		{
+//			flag_SIM900_died = 0;
+////			Serial.println("Alive!");
+////			Serial.println(sInstrSIM900);
+////			Serial.println("Alive!");
+//		}
+//		else
+//		{
+////			Serial.println("Is DEAD??");
+////			flag_SIM900_died = 1;
+//		}
+//		memset(&sInstrSIM900, 0, sInstrSIM900_Length);
+//	}
 }
 void comm_SIM900_SerialPC()
 {
@@ -1868,9 +1866,6 @@ void summary_Print(uint8_t opt)
 			{
 				Serial1.println(buffer);
 			}
-
-
-
 
 //			sprintf(buffer,"t[01]:%d, t[02]:%d, t[03]:%d, t[04]:%d, t[05]:%d, t[06]:%d, t[07]:%d, t[08]:%d, t[09]:%d, t[10]:%d, t[11]:%d",timeSectorVectorMin[0], timeSectorVectorMin[1], timeSectorVectorMin[2], timeSectorVectorMin[3], timeSectorVectorMin[4], timeSectorVectorMin[5], timeSectorVectorMin[6], timeSectorVectorMin[7], timeSectorVectorMin[8], timeSectorVectorMin[9],timeSectorVectorMin[10], timeSectorVectorMin[11]);
 //			Serial1.println(buffer);
@@ -2252,8 +2247,7 @@ void handleMessage()
 				summary_Print(10);
 				break;
 		}
-
-		memset(&sInstr, 0, sizeof(sInstr));
+		memset(sInstr, 0, sizeof(sInstr));
 	}
 }
 
@@ -2273,6 +2267,10 @@ void summary_GLCD()
 
 		sprintf(buffer,"Setor%.2d: %.4d",stateSector, timeSector);
 		GLCD.CursorTo(0,3);
+		GLCD.print(buffer);
+
+		sprintf(buffer,"flag_SIM900_checkAlive = %d",flag_SIM900_checkAlive);
+		GLCD.CursorTo(0,6);
 		GLCD.print(buffer);
 
 		int I=(int) (1000.0*calcIrms());
