@@ -142,7 +142,8 @@ uint8_t sectorChanged = 0;
 uint8_t flag_SIM900_checkAlive = 0;
 uint8_t flag_SIM900_died = 0;
 
-char buffer[130];
+char buffer[180];
+int soilHumidity = 0;
 
 //char c;
 uint8_t j1 = 0;
@@ -172,7 +173,7 @@ volatile uint8_t flag_summaryGLCD = 0;
 char inChar, aux[3], aux2[5], sInstr[15];
 uint8_t k=0, rLength, opcode;
 uint8_t rLengthSIM900=0;
-const int sInstrSIM900_Length = 140;
+const int sInstrSIM900_Length = 180;
 char sInstrSIM900[sInstrSIM900_Length];
 char sInstrBluetooth[15];
 char celPhoneNumber_str[12];
@@ -302,7 +303,7 @@ void init_ADC()
 	ADMUX &= ~(1<<MUX0);
 
 	ADMUX |=  (1<<REFS0);							// Internal 2.56V reference
-	ADMUX &= ~(1<<REFS1);
+	ADMUX |=  (1<<REFS1);
 }
 void init_WDT()
 {
@@ -420,6 +421,9 @@ float calcIrms()//uint8_t channel)//, uint8_t numberOfCycles)
 	int i, j=0;
 	uint8_t high, low;
 	int divScale_count = 1;
+
+	ADMUX &= ~(1<<MUX1);							// Select ADC0
+	ADMUX &= ~(1<<MUX0);
 
 	// ADC converter
 	const float f = 60.0;									// Hertz;
@@ -553,6 +557,23 @@ float calcIrms()//uint8_t channel)//, uint8_t numberOfCycles)
 	return I;
 }
 
+int soilSensorRead()
+{
+	uint8_t high, low;
+
+	ADMUX |=  (1<<MUX1);							// Select ADC2
+	ADMUX &= ~(1<<MUX0);
+
+	ADCSRA |= (1<<ADSC);				// Start conversion;
+	while (bit_is_set(ADCSRA, ADSC));	// wait until conversion done;
+
+	low  = ADCL;
+	high = ADCH;
+
+	soilHumidity = (high << 8) | low;
+
+	return soilHumidity;
+}
 
 void motor_start()
 {
@@ -1039,6 +1060,7 @@ void  SIM900_checkAlive()
 
 		flag_SIM900_checkAlive = 1;
 		count_SIM900_timeout = 0;
+		j1 = 0;
 	}
 }
 
@@ -1415,9 +1437,7 @@ void process_Programmed()
 			turnAll_OFF();
 			stateSector = 1;
 		}
-
 	}
-
 }
 void process_valveTest()
 {
@@ -1484,10 +1504,9 @@ void refreshVariables()
 {
 	if(flag_30s)
 	{
-		flag_30s = 0;
-		count30s = 10;
-
 		SIM900_checkAlive();
+		flag_30s = 0;
+		count30s = 20;
 	}
 
 	if (flag_1s)
@@ -1550,7 +1569,7 @@ void comm_SIM900()
 //			Serial.println("Frame Start!");
 		}
 
-		if(flag_frameStartSIM900)
+		if(flag_frameStartSIM900||flag_SIM900_checkAlive)
 		{
 			sInstrSIM900[j1] = inChar;
 //			Serial.write(sInstrSIM900[j1]);
@@ -1584,7 +1603,7 @@ void comm_SIM900()
 				enableSIM900_checkAliveCompare = 1;
 				flag_SIM900_checkAlive = 0;
 				count_SIM900_timeout = 0;
-//				j1 = 0;
+				j1 = 0;
 			}
 		}
 	}
@@ -1859,7 +1878,7 @@ void summary_Print(uint8_t opt)
 	switch (opt)
 	{
 		case 0:
-			sprintf(buffer,"Time: %.2d:%.2d:%.2d, %.2d/%.2d/%d Motor:%d, Mode:%d Uptime: %.2d:%.2d:%.2d, %d d, %d m, %d y, t1:%d, t2:%d, t3:%d, t4:%d, t5:%d, t6:%d, t7:%d, t8:%d, t9:%d, t10:%d, t11:%d",tm.Hour, tm.Minute, tm.Second, tm.Day, tm.Month, tmYearToCalendar(tm.Year), motorStatus, stateMode,hour(), minute(), second(), day()-1, month()-1, year()-1970, timeSectorVectorMin[0], timeSectorVectorMin[1], timeSectorVectorMin[2], timeSectorVectorMin[3], timeSectorVectorMin[4], timeSectorVectorMin[5], timeSectorVectorMin[6], timeSectorVectorMin[7], timeSectorVectorMin[8], timeSectorVectorMin[9],timeSectorVectorMin[10]);
+			sprintf(buffer,"Time: %.2d:%.2d:%.2d, %.2d/%.2d/%d, Motor:%d, Mode:%d Uptime: %.2d:%.2d:%.2d, %d d, %d m, %d y, t1:%d, t2:%d, t3:%d, t4:%d, t5:%d, t6:%d, t7:%d, t8:%d, t9:%d, t10:%d, t11:%d",tm.Hour, tm.Minute, tm.Second, tm.Day, tm.Month, tmYearToCalendar(tm.Year), motorStatus, stateMode,hour(), minute(), second(), day()-1, month()-1, year()-1970, timeSectorVectorMin[0], timeSectorVectorMin[1], timeSectorVectorMin[2], timeSectorVectorMin[3], timeSectorVectorMin[4], timeSectorVectorMin[5], timeSectorVectorMin[6], timeSectorVectorMin[7], timeSectorVectorMin[8], timeSectorVectorMin[9],timeSectorVectorMin[10]);
 			if(enableSIM900_Send)
 			{
 				enableSIM900_Send = 0;
@@ -1873,7 +1892,7 @@ void summary_Print(uint8_t opt)
 			break;
 
 		case 1:
-			sprintf(buffer,"Time: %.2d:%.2d:%.2d, %.2d/%.2d/%d, Motor: %d, s1:%d, s2:%d, s3:%d, s4:%d, s5:%d, s6:%d, s7:%d, s8:%d, s9:%d, s10:%d, s11:%d, f01:%d, f02:%d",tm.Hour, tm.Minute, tm.Second, tm.Day, tm.Month, tmYearToCalendar(tm.Year), motorStatus, valveStatus[0], valveStatus[1], valveStatus[2], valveStatus[3], valveStatus[4], valveStatus[5], valveStatus[6], valveStatus[7], valveStatus[8], valveStatus[9],valveStatus[10], valveStatus[11], valveStatus[12]);
+			sprintf(buffer,"Time: %.2d:%.2d:%.2d, %.2d/%.2d/%d, Per.: %d, Motor: %d, s1:%d, s2:%d, s3:%d, s4:%d, s5:%d, s6:%d, s7:%d, s8:%d, s9:%d, s10:%d, s11:%d, f01:%d, f02:%d",tm.Hour, tm.Minute, tm.Second, tm.Day, tm.Month, tmYearToCalendar(tm.Year), flag_timeMatch, motorStatus, valveStatus[0], valveStatus[1], valveStatus[2], valveStatus[3], valveStatus[4], valveStatus[5], valveStatus[6], valveStatus[7], valveStatus[8], valveStatus[9],valveStatus[10], valveStatus[11], valveStatus[12]);
 			if(enableSIM900_Send)
 			{
 				enableSIM900_Send = 0;
@@ -2306,21 +2325,21 @@ void handleMessage()
 				{
 					case 0:
 						Serial1.println("Starting GPRS Conn...!");
-						SIM900_GPRS_Connect();
+//						SIM900_GPRS_Connect();
 						break;
 
 					case 1:
-						SIM900_getIpAddress();
+//						SIM900_getIpAddress();
 						break;
 
 					case 2:
 						Serial1.println("Starting TCP Server...");
-						SIM900_TCP_Server_Start();
+//						SIM900_TCP_Server_Start();
 						break;
 
 					case 3:
 						Serial1.println("Stoping GPRS Conn...!");
-						SIM900_GPRS_Diconnect();
+//						SIM900_GPRS_Diconnect();
 
 						break;
 
@@ -2352,7 +2371,7 @@ void summary_GLCD()
 		GLCD.CursorTo(0,0);
 		GLCD.print(buffer);
 
-		sprintf(buffer,"Mode: %d",stateMode);
+		sprintf(buffer,"Mode: %d     Per.:%d",stateMode, flag_timeMatch);
 		GLCD.CursorTo(0,2);
 		GLCD.print(buffer);
 
@@ -2360,13 +2379,13 @@ void summary_GLCD()
 		GLCD.CursorTo(0,3);
 		GLCD.print(buffer);
 
-		sprintf(buffer,"RAM: %d",freeMemory());
-		GLCD.CursorTo(0,6);
-		GLCD.print(buffer);
-
 		int I=(int) (1000.0*calcIrms());
 		sprintf(buffer,"Is= %4.d mA",I);
 		GLCD.CursorTo(20,4);
+		GLCD.print(buffer);
+
+		sprintf(buffer,"RAM: %d",freeMemory());
+		GLCD.CursorTo(0,6);
 		GLCD.print(buffer);
 	}
 }
@@ -2426,6 +2445,9 @@ int main()
 	{
 //		wdt_reset();
 
+//		sprintf(buffer,"Hum. Solo: %.4d",soilSensorRead());
+//		GLCD.CursorTo(0,7);
+//		GLCD.print(buffer);
 		// Refresh all variables to compare and take decisions;
 		refreshVariables();
 
