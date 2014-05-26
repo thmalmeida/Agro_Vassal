@@ -2,7 +2,7 @@
 #include <avr/io.h>
 #include <avr/interrupt.h>
 #include <avr/eeprom.h>
-//#include <avr/wdt.h>
+#include <avr/wdt.h>
 
 #include <Arduino.h>
 #include <string.h>
@@ -95,7 +95,7 @@ enum statesMode {
 	valveTesting
 };
 enum statesMode stateMode = manual;
-// Time sector in minutes
+// Time sectorPrivate in minutes
 //#define st11 5
 //#define st10 5
 //#define st09 5
@@ -122,6 +122,7 @@ enum statesMode stateMode = manual;
 //uint8_t motorTime = 0;
 uint8_t flag_motorStart = 0;
 uint8_t timeCounter = 0;
+uint8_t flag_reset = 0;
 
 uint16_t timeSectorSet = 4*60;
 volatile uint16_t timeSector = 0;
@@ -136,13 +137,15 @@ uint8_t onlyValve = 0;
 uint8_t motorStatus = 0;
 uint8_t valveStatus[13] = {0,0,0,0,0,0,0,0,0,0,0,0,0};
 uint8_t sector = 0;
+uint8_t sectorCurrently = 0;
+uint8_t sectorRequired = 0;
 uint8_t sectorCommand = 0;
 uint8_t sectorChanged = 0;
 
 uint8_t flag_SIM900_checkAlive = 0;
 uint8_t flag_SIM900_died = 0;
 
-char buffer[180];
+char buffer[200];
 int soilHumidity = 0;
 
 //char c;
@@ -173,7 +176,7 @@ volatile uint8_t flag_summaryGLCD = 0;
 char inChar, aux[3], aux2[5], sInstr[15];
 uint8_t k=0, rLength, opcode;
 uint8_t rLengthSIM900=0;
-const int sInstrSIM900_Length = 180;
+const int sInstrSIM900_Length = 200;
 char sInstrSIM900[sInstrSIM900_Length];
 char sInstrBluetooth[15];
 char celPhoneNumber_str[12];
@@ -610,9 +613,9 @@ void motor_stop()
 
 	motorStatus = 0;
 }
-void valveInstr(uint8_t sector, uint8_t status)
+void valveInstr(uint8_t sectorPrivate, uint8_t status)
 {
-	switch (sector)
+	switch (sectorPrivate)
 	{
 		case 1:
 			if(status)
@@ -792,13 +795,15 @@ void turnAll_OFF()
 	{
 		valveInstr(i,0);
 	}
+
+	sectorCurrently = 0;
 }
 
 
-uint16_t timeSectorMemory(uint8_t sector)
+uint16_t timeSectorMemory(uint8_t sectorPrivate)
 {
-	return 60*timeSectorVectorMin[sector-1];
-//	return timeSectorVectorMin[sector-1];
+	return 60*timeSectorVectorMin[sectorPrivate-1];
+//	return timeSectorVectorMin[sectorPrivate-1];
 }
 
 void SIM900_sendmail()
@@ -1065,7 +1070,7 @@ void  SIM900_checkAlive()
 }
 
 
-uint8_t valveInstrSafe(uint8_t sector, uint8_t instruction)
+uint8_t valveInstrSafe(uint8_t sectorPrivate, uint8_t instruction)
 {
 	uint8_t changed = 0;
 	float Ia0=0.0, Ib0=0.0, Ic0=0.0, Ia1=0.0, Ib1=0.0, Ic1=0.0;
@@ -1083,7 +1088,7 @@ uint8_t valveInstrSafe(uint8_t sector, uint8_t instruction)
 	Im0 = (int) (1000.0*(Ia0+Ib0+Ic0)/3.0);
 
 	// Set valve instruction
-	valveInstr(sector, instruction);
+	valveInstr(sectorPrivate, instruction);
 	_delay_ms(300);
 
 	// Take a measure after turn on
@@ -1104,7 +1109,7 @@ uint8_t valveInstrSafe(uint8_t sector, uint8_t instruction)
 		}
 		else
 		{
-			valveInstr(sector,0);
+			valveInstr(sectorPrivate,0);
 			changed = 0;
 		}
 	}
@@ -1116,14 +1121,14 @@ uint8_t valveInstrSafe(uint8_t sector, uint8_t instruction)
 		}
 		else
 		{
-			valveInstr(sector,1);
+			valveInstr(sectorPrivate,1);
 			changed = 0;
 		}
 	}
 
 	return changed;
 }
-uint8_t valveTest(uint8_t sector)
+uint8_t valveTest(uint8_t sectorPrivate)
 {
 	float I0a=0.0, I0b=0.0, I0c=0.0, Ia=0.0, Ib=0.0, Ic=0.0;
 	int I0m=0, Im=0;
@@ -1143,7 +1148,7 @@ uint8_t valveTest(uint8_t sector)
 		I0m = (int) (1.2*1000.0*(I0a+I0b+I0c)/3.0);
 
 		// Put load
-		valveInstr(sector,1);
+		valveInstr(sectorPrivate,1);
 		_delay_ms(1000);
 
 		// Measurement of current without load
@@ -1156,7 +1161,7 @@ uint8_t valveTest(uint8_t sector)
 
 		Im = (int) (1000.0*(Ia+Ib+Ic)/3.0);
 
-		valveInstr(sector,0);
+		valveInstr(sectorPrivate,0);
 
 		// Check if it is okay.
 		if(Im<=I0m)
@@ -1204,7 +1209,7 @@ void verifyValve()
 		}
 	}
 }
-uint8_t verifyNextValve(uint8_t sector)
+uint8_t verifyNextValve(uint8_t sectorPrivate)
 {
 	uint8_t nextSector = 0;
 	float I0a=0.0, I0b=0.0, I0c=0.0, Ia=0.0, Ib=0.0, Ic=0.0;
@@ -1213,7 +1218,7 @@ uint8_t verifyNextValve(uint8_t sector)
 
 	while(Im<=I0m)
 	{
-//		sprintf(buffer,"-- Sector[%d] --:",sector+i);
+//		sprintf(buffer,"-- Sector[%d] --:",sectorPrivate+i);
 //		Serial1.println(buffer);
 		I0a = calcIrms();	// Read currently current;
 		_delay_ms(100);
@@ -1233,7 +1238,7 @@ uint8_t verifyNextValve(uint8_t sector)
 //		Serial1.println(I0m);
 
 
-		valveInstr(sector+i,1);
+		valveInstr(sectorPrivate+i,1);
 		_delay_ms(1000);
 
 		Ia = calcIrms();	// Read currently current;
@@ -1253,31 +1258,31 @@ uint8_t verifyNextValve(uint8_t sector)
 //		Serial1.print("Im: ");
 //		Serial1.println(Im);
 
-//		sprintf(buffer,"I[%.2d]: ",sector+i);
+//		sprintf(buffer,"I[%.2d]: ",sectorPrivate+i);
 //		Serial1.print(buffer);
 //		Serial1.println(Im);
 
 		if(Im<=I0m)
 		{
-			valveInstr(sector+i,0);
-//			sprintf(buffer,"Sector[%.2d]: Down!",sector+i);
+			valveInstr(sectorPrivate+i,0);
+//			sprintf(buffer,"Sector[%.2d]: Down!",sectorPrivate+i);
 //			Serial1.println(buffer);
 			i++;
 		}
 		else
 		{
-			nextSector = sector+i;
+			nextSector = sectorPrivate+i;
 		}
 
-		if((sector+i) >= 12)
+		if((sectorPrivate+i) >= 12)
 		{
 			nextSector = 0;
 			Im = 2.0*I0m;
 
 			flag_sector = 1;
 
-			valveInstr(sector-1,0);	// Desliga atual
-			valveInstr(sector,0);		// Desliga o que ligou
+			valveInstr(sectorPrivate-1,0);	// Desliga atual
+			valveInstr(sectorPrivate,0);		// Desliga o que ligou
 			turnAll_OFF();
 
 			sprintf(buffer,"Time: %.2d:%.2d:%.2d, %.2d/%.2d/%d \n Sistema Desligado!",tm.Hour, tm.Minute, tm.Second, tm.Day, tm.Month, tmYearToCalendar(tm.Year));
@@ -1506,7 +1511,7 @@ void refreshVariables()
 	{
 		SIM900_checkAlive();
 		flag_30s = 0;
-		count30s = 20;
+		count30s = 30;
 	}
 
 	if (flag_1s)
@@ -1991,6 +1996,9 @@ void handleMessage()
 		01;				- Relacao do status das valvulas (ligada ou desligada)
 		02;				- Numero do telefone.
 
+		08;				- Reseta SIM900.
+		09;				- Reseta o sistema.
+
 	1123030;		Ajustar a hora para 12:30:30
 	201042014;		ajustar a data para 01 de abril de 2014
 	31;				ligar (31) ou desligar (30) o motor
@@ -2004,7 +2012,6 @@ void handleMessage()
 		69:s03;			- Testa o setor 3 se está funcionando e retorna msg;
 	727988081875;	Troca número de telefone
 	8;				Reinicializa o GLCD;
-
 */
 
 	// Tx - Transmitter
@@ -2032,25 +2039,53 @@ void handleMessage()
 		switch (opcode)
 		{
 			case 0:		// Check status
+			{
+				aux[0] = '0';
+				aux[1] = sInstr[1];
+				aux[2] = '\0';
+				uint8_t statusCommand = 0;
+				statusCommand = (uint8_t) atoi(aux);
 
-				if(sInstr[1] == ';')
+				if(sInstr[2] == ';')
 				{
-					summary_Print(0);
-				}
-				else
-				{
-					aux[0] = '0';
-					aux[1] = sInstr[1];
-					aux[2] = '\0';
-					uint8_t statusCommand = (uint8_t) atoi(aux);
+					switch (statusCommand)
+					{
+						case 8:
+							SIM900_reset();
+							count30s = 30;
+							break;
 
-					summary_Print(statusCommand);
-				}
+						case 9:
+							flag_reset = 1;
+							break;
 
+						default:
+							summary_Print(statusCommand);
+							break;
+					}
+				}
+			}
 				break;
 
-			case 1:		// Set-up clock
+//				if(sInstr[1] == ';')
+//				{
+//					summary_Print(0);
+//				}
+//				else
+//				{
+//					aux[0] = '0';
+//					aux[1] = sInstr[1];
+//					aux[2] = '\0';
+//					uint8_t statusCommand = (uint8_t) atoi(aux);
+//
+//					summary_Print(statusCommand);
+//				}
+//
+//				break;
 
+// -----------------------------------------------------------------
+			case 1:		// Set-up clock
+			{
 				// Getting the parameters
 				aux[0] = sInstr[1];
 				aux[1] = sInstr[2];
@@ -2070,9 +2105,10 @@ void handleMessage()
 				RTC.write(tm);
 
 				summary_Print(0);
-
+			}
 				break;
 
+// -----------------------------------------------------------------
 			case 2:		// Set-up date
 
 				// Getting the parameters
@@ -2100,6 +2136,7 @@ void handleMessage()
 
 				break;
 
+// -----------------------------------------------------------------
 			case 3:		// Set motor ON/OFF
 
 				uint8_t motorCommand;
@@ -2118,6 +2155,7 @@ void handleMessage()
 
 				break;
 
+// -----------------------------------------------------------------
 			case 4:	// ON OFF sectors
 				if(sInstr[1] == 's')
 				{
@@ -2151,7 +2189,17 @@ void handleMessage()
 					aux[2] = '\0';
 					sectorCommand = (uint8_t) atoi(aux);
 
+					if(enableSIM900_Send)
+					{
+						_delay_ms(5000);
+					}
+
 					sectorChanged = valveInstrSafe(sector, sectorCommand);
+					if(sectorChanged)
+					{
+						valveInstr(sectorCurrently, 0);
+						sectorCurrently = sector;
+					}
 
 					summary_Print(4);
 
@@ -2160,6 +2208,7 @@ void handleMessage()
 				}
 				break;
 
+// -----------------------------------------------------------------
 			case 5:
 //				5t01:23;
 				if(sInstr[1] == 't')
@@ -2184,7 +2233,9 @@ void handleMessage()
 
 				break;
 
+// -----------------------------------------------------------------
 			case 6:
+			{
 				// 6x;
 				// 63:sxx;
 				uint8_t setCommand;
@@ -2197,6 +2248,7 @@ void handleMessage()
 				{
 					case 0:
 						stateMode = manual;
+						turnAll_OFF();
 						if(motorStatus)
 						{
 							flag_timeMatch = 0;
@@ -2268,9 +2320,11 @@ void handleMessage()
 						break;
 				}
 				summary_Print(0);
+			}
+			break;
 
-				break;
 
+// -----------------------------------------------------------------
 			case 7:
 			// 7:27988081875;
 
@@ -2309,10 +2363,12 @@ void handleMessage()
 
 				break;
 
+// -----------------------------------------------------------------
 			case 8:
 				GLCD.Init();
 			break;
 
+// -----------------------------------------------------------------
 			case 9: // internet stuffs
 				// 9x;
 				uint8_t setCommandConnection;
@@ -2353,6 +2409,7 @@ void handleMessage()
 				}
 				break;
 
+// -----------------------------------------------------------------
 			default:
 				summary_Print(10);
 				break;
@@ -2392,6 +2449,11 @@ void summary_GLCD()
 
 ISR(TIMER1_COMPA_vect)
 {
+	if(!flag_reset)
+	{
+		wdt_reset();
+	}
+
 	if(flag_SIM900_checkAlive)
 	{
 		count_SIM900_timeout++;
@@ -2437,13 +2499,15 @@ int main()
 	refreshTimeSectors();
 	refreshCelPhoneNumber();
 
+	strcpy(buffer,"- Raiden Controller Started! -");
+	SIM900_sendSMS(buffer);
+
 	// WDT enable
-//	wdt_enable(WDTO_8S);
+	wdt_enable(WDTO_4S);
 
 	// Program comes here
 	while (1)
-	{
-//		wdt_reset();
+{
 
 //		sprintf(buffer,"Hum. Solo: %.4d",soilSensorRead());
 //		GLCD.CursorTo(0,7);
