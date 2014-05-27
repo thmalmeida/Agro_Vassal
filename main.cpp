@@ -55,9 +55,13 @@ tmElements_t tm;
 #define f02_off()	PORTB &= ~(1<<5);	// f02
 
 // Contactors input
-//#define k3_read		~(PINE & 0b00001000)
+#define k1_read (~PINH & 0b00001000)
 #define k3_read (~PINE & 0b00001000)
-//#define k3_read	bit_is_set(PINE, 3)
+#define Th_read (~PINH & 0b00010000)
+
+//#define k3_read	bit_is_clear(PINE, 3)
+//#define k1_read	bit_is_clear(PINH, 3)
+//#define Th_read	bit_is_clear(PINH, 4)
 //bit_is_set(PIND, 3)
 
 const char *monthName[12] = {
@@ -169,6 +173,7 @@ uint8_t flag02 = 0;
 uint8_t flag03 = 0;
 uint8_t flag04 = 0;
 uint8_t flag05 = 0;
+uint8_t flag_Th = 0;
 uint8_t flag_frameStartSIM900 = 0;
 uint8_t flag_frameStartBT = 0;
 volatile uint8_t flag_summaryGLCD = 0;
@@ -255,8 +260,9 @@ void init_valves()
 }
 void init_contactors()
 {
-	// K3 as input
-	DDRE &= ~(1<<3);
+	DDRE &= ~(1<<3);		// K1 NO input
+	DDRH &= ~(1<<3);		// K3 NO input
+	DDRH &= ~(1<<4);		// Thermal device protection
 }
 void init_motorDriver()
 {
@@ -799,7 +805,6 @@ void turnAll_OFF()
 	sectorCurrently = 0;
 }
 
-
 uint16_t timeSectorMemory(uint8_t sectorPrivate)
 {
 	return 60*timeSectorVectorMin[sectorPrivate-1];
@@ -1069,6 +1074,25 @@ void  SIM900_checkAlive()
 	}
 }
 
+void thermalSafe()
+{
+	if(Th_read)
+	{
+		if(!flag_Th)
+		{
+			flag_Th = 1;
+
+			turnAll_OFF();
+			stateMode = manual;
+			strcpy(buffer,"Rele Sobrecarga!");
+			SIM900_sendSMS(buffer);
+		}
+	}
+	else
+	{
+		flag_Th = 0;
+	}
+}
 
 uint8_t valveInstrSafe(uint8_t sectorPrivate, uint8_t instruction)
 {
@@ -2444,6 +2468,10 @@ void summary_GLCD()
 		sprintf(buffer,"RAM: %d",freeMemory());
 		GLCD.CursorTo(0,6);
 		GLCD.print(buffer);
+
+		sprintf(buffer,"k1: %d, k3: %d, Th: %2.d",k1_read, k3_read, Th_read);
+		GLCD.CursorTo(10,7);
+		GLCD.print(buffer);
 	}
 }
 
@@ -2508,7 +2536,6 @@ int main()
 	// Program comes here
 	while (1)
 {
-
 //		sprintf(buffer,"Hum. Solo: %.4d",soilSensorRead());
 //		GLCD.CursorTo(0,7);
 //		GLCD.print(buffer);
@@ -2532,6 +2559,8 @@ int main()
 
 //		GLD Screen Informations
 		summary_GLCD();
+
+		thermalSafe();
 
 //		Serial.println(freeMemory());
 	}
