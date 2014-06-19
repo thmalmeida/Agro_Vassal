@@ -1,8 +1,43 @@
-#include <util/delay.h>
+/*
+Used ports
+
+PG5 --> k1
+PE5 --> k2
+PE4	--> k3
+
+PC2 --> s11
+PC1 --> s10
+PC0 --> s09
+PD7 --> s08
+PG2 --> s07
+PG1 --> s06
+PG0 --> s05
+PL7 --> s04
+PL6 --> s03
+PL5 --> s02
+PL4 --> s01
+PB4 --> f01
+PB5 --> f02
+
+PH3 --> k1_read
+PE3 --> k3_read
+PH4 --> Th_read
+
+PF0 --> ADC Irms
+PF1 --> ADC Vrms
+PD1 --> SDA DS1307
+PD0 --> SDL DS1307
+
+PD3 --> TX1 BT
+PD2 --> RX1 BT
+
+*/
+
 #include <avr/io.h>
 #include <avr/interrupt.h>
 #include <avr/eeprom.h>
 #include <avr/wdt.h>
+#include <util/delay.h>
 
 #include <Arduino.h>
 #include <string.h>
@@ -11,13 +46,14 @@
 #include "glcd.h"    				// Graphics LCD library
 #include "fonts/allFonts.h"
 
-#include "main.h"
 #include "DS1307RTC.h"
 #include "Time.h"
+#include "OneWire.h"
 
 #include "MemoryFree.h"
 
 tmElements_t tm;
+OneWire ds(46);
 
 #define k1_on()		PORTG |=  (1<<5);	// Triac 1 is enabled
 #define k1_off()	PORTG &= ~(1<<5);	// Triac 1 is disabled
@@ -74,20 +110,6 @@ enum states01 {
 	greenTime
 };
 enum states01 periodState = redTime;
-//enum states_sector {
-//	s01,
-//	s02,
-//	s03,
-//	s04,
-//	s05,
-//	s06,
-//	s07,
-//	s08,
-//	s09,
-//	s10,
-//	s11
-//};
-//enum states_sector stateSector = s01;
 
 uint8_t stateSector =0;
 
@@ -99,29 +121,19 @@ enum statesMode {
 	valveTesting
 };
 enum statesMode stateMode = manual;
-// Time sectorPrivate in minutes
-//#define st11 5
-//#define st10 5
-//#define st09 5
-//#define st08 5
-//#define st07 5
-//#define st06 5
-//#define st05 5
-//#define st04 5
-//#define st03 5
-//#define st02 5
-//#define st01 5
 
-//#define Length 3*160.0
-//const int Ncycles = 3;
-//const int Length = Ncycles*160;	// N cycles
-//const int Length = 320;		// 2 cycles
-//const int Length = 480;		// 3 cycles
-//const int Length = 640;		// 4 cycles
-//const int Length = 800;		// 5 cycles
-//const int Length = 960;		// 6 cycles
-//const int Length = 1120;		// 7 cycles
-//const int Length = 1280;		// 8 cycles
+float tempNow = 0.0;
+
+// EEPROM memory allocation
+const uint16_t addr_timeSector = 0;
+const uint16_t addr_celNumber = 20;
+const uint16_t addr_tempMin = 100;
+const uint16_t addr_tempMax = 130;
+const uint16_t addr_tempMean = 160;
+
+const int nTempDay = 288;
+const int nTempMonth = 30;
+
 
 //uint8_t motorTime = 0;
 uint8_t flag_motorStart = 0;
@@ -134,8 +146,6 @@ uint8_t timeSectorVectorMin[11];
 uint8_t celPhoneNumber[11];
 uint8_t flag_1s = 0;
 
-//uint8_t flag_SMS = 0;
-//uint8_t flag_valve = 0;
 uint8_t valveOnTest = 0;
 uint8_t onlyValve = 0;
 uint8_t motorStatus = 0;
@@ -152,9 +162,6 @@ uint8_t flag_SIM900_died = 0;
 char buffer[200];
 int soilHumidity = 0;
 
-//char c;
-uint8_t j1 = 0;
-uint8_t j2 = 0;
 uint8_t flag_sector=1;
 volatile uint8_t flag_timeOVF=0;
 uint16_t sample = 0;
@@ -177,7 +184,8 @@ uint8_t flag_Th = 0;
 uint8_t flag_frameStartSIM900 = 0;
 uint8_t flag_frameStartBT = 0;
 volatile uint8_t flag_summaryGLCD = 0;
-// Bluetooth variables
+
+// Communicaton variables
 char inChar, aux[3], aux2[5], sInstr[15];
 uint8_t k=0, rLength, opcode;
 uint8_t rLengthSIM900=0;
@@ -186,6 +194,9 @@ char sInstrSIM900[sInstrSIM900_Length];
 char sInstrBluetooth[15];
 char celPhoneNumber_str[12];
 
+uint8_t j1 = 0;
+uint8_t j2 = 0;
+
 uint8_t enableTranslate_Bluetooth = 0;
 uint8_t enableTranslate_SIM900 = 0;
 uint8_t enableSIM900_checkAliveCompare = 0;
@@ -193,8 +204,12 @@ uint8_t enableSIM900_Send = 0;
 uint8_t enableDecode = 0;
 
 volatile uint8_t flag_30s = 1;
-volatile uint8_t count30s = 0;
+volatile uint8_t flag_5min = 1;
+volatile uint8_t count_30s = 0;
+volatile uint16_t count_5min = 300;
+
 volatile uint8_t count_SIM900_timeout = 0;
+
 
 void print2digits(int number)
 {
@@ -330,6 +345,9 @@ void init_WDT()
 //	WDTCSR = 0b00111000;
 
 //	wdt_enable(WDTO_8S);
+	// WDT enable
+
+	wdt_enable(WDTO_8S);
 }
 
 void stop_WDT()
@@ -565,6 +583,244 @@ float calcIrms()//uint8_t channel)//, uint8_t numberOfCycles)
 
 	return I;
 }
+float getAirTemperature()
+{
+//	int *adcSamples = NULL;
+//	adcSamples = (int*)malloc(nPoints_div * sizeof(int));
+
+	byte i;
+	byte present = 0;
+	byte type_s = 0;
+	byte data[12];
+	byte addr[8];
+	float celsius;//, fahrenheit;
+
+	if ( !ds.search(addr))
+	{
+//		Serial.println("No more addresses.");
+//		Serial.println();
+		ds.reset_search();
+		delay(250);
+	}
+
+//	Serial.print("ROM =");
+//	for( i = 0; i < 8; i++)
+//	{
+//		Serial.write(' ');
+//		Serial.print(addr[i], HEX);
+//	}
+
+	if (OneWire::crc8(addr, 7) != addr[7])
+	{
+//		Serial.println("CRC is not valid!");
+	}
+//	Serial.println();
+
+	// the first ROM byte indicates which chip
+	switch (addr[0])
+	{
+		case 0x10:
+//			Serial.println("  Chip = DS18S20");  // or old DS1820
+			type_s = 1;
+			break;
+
+		case 0x28:
+//			Serial.println("  Chip = DS18B20");
+			type_s = 0;
+			break;
+
+		case 0x22:
+//			Serial.println("  Chip = DS1822");
+			type_s = 0;
+			break;
+
+		default:
+//			Serial.println("Device is not a DS18x20 family device.");
+			break;
+	}
+
+	ds.reset();
+	ds.select(addr);
+	ds.write(0x44, 1);        // start conversion, with parasite power on at the end
+
+	delay(1000);     // maybe 750ms is enough, maybe not
+	// we might do a ds.depower() here, but the reset will take care of it.
+
+	present = ds.reset();
+	ds.select(addr);
+	ds.write(0xBE);         // Read Scratchpad
+
+//	Serial.print("  Data = ");
+//	Serial.print(present, HEX);
+//	Serial.print(" ");
+
+	for ( i = 0; i < 9; i++) {           // we need 9 bytes
+		data[i] = ds.read();
+//		Serial.print(data[i], HEX);
+//		Serial.print(" ");
+	}
+
+//	Serial.print(" CRC=");
+//	Serial.print(OneWire::crc8(data, 8), HEX);
+//	Serial.println();
+
+	// Convert the data to actual temperature
+	// because the result is a 16 bit signed integer, it should
+	// be stored to an "int16_t" type, which is always 16 bits
+	// even when compiled on a 32 bit processor.
+	int16_t raw = (data[1] << 8) | data[0];
+
+	if (type_s)
+	{
+		raw = raw << 3; // 9 bit resolution default
+		if (data[7] == 0x10)
+		{
+			// "count remain" gives full 12 bit resolution
+			raw = (raw & 0xFFF0) + 12 - data[6];
+		}
+	}
+	else
+	{
+		byte cfg = (data[4] & 0x60);
+		// at lower res, the low bits are undefined, so let's zero them
+		if (cfg == 0x00) raw = raw & ~7;  // 9 bit resolution, 93.75 ms
+		else if (cfg == 0x20) raw = raw & ~3; // 10 bit res, 187.5 ms
+		else if (cfg == 0x40) raw = raw & ~1; // 11 bit res, 375 ms
+		//// default is 12 bit resolution, 750 ms conversion time
+	}
+
+	celsius = (float)raw / 16.0;
+//	fahrenheit = celsius * 1.8 + 32.0;
+//	Serial.print("  Temperature = ");
+//	Serial.print(celsius);
+//	Serial.println(" Celsius, ");
+//	Serial.print(fahrenheit);
+//	Serial.println(" Fahrenheit");
+
+	return celsius;
+}
+void temperatureAnalysis()
+{
+	/*
+	 The temperature interval is from -2 C to +49 C represented by one
+	 8-bit variable (0-255).
+
+	 It need some simple equation to make the conversion.
+
+ 	+49 C___		255___
+	  	  |				|
+	 	  |				|
+	 	  |				|
+	temp__|			xs__|
+	 	  |				|
+	 	  |				|
+	 	  |				|
+		 _|_		   _|_
+	 -2 C			 0
+
+	(xs - 0) = temp - (-2)
+	(255 - 0)  +49 - (-2)
+
+	Direct Conversion
+	xs = 255*(temp+2)/51
+	tempNow_XS = (uint8_t) 255.0*(tempNow+2.0)/51.0;
+
+	Inverse Conversion
+	temp = (51*xs/255) - 2
+	tempNow = (uint8_t) ((51.0*tempNow_XS)/255.0 -2.0);
+
+	 tempRead
+	 */
+
+
+	uint8_t temperature_Day[nTempDay];
+	uint8_t temperature_Max[nTempMonth];
+	uint8_t temperature_Mean[nTempMonth];
+	uint8_t temperature_Min[nTempMonth];
+
+	float tempMean, tempMax, tempMin;
+	float tempMean_XS, tempMax_XS, tempMin_XS;
+	uint8_t tempNow_XS;
+
+	// For the first time ------------------------------------
+	tempNow = getAirTemperature();
+	tempNow_XS = (uint8_t) 255.0*(tempNow+2.0)/51.0;
+
+	int i;
+	for(i=0;i<nTempDay;i++)
+		temperature_Day[i] = tempNow_XS;
+
+	for(i=0;i<nTempMonth;i++)
+	{
+		temperature_Max[i] = tempNow_XS;
+		temperature_Min[i] = tempNow_XS;
+	}
+
+	tempMean_XS = tempNow_XS;
+	tempMax_XS = tempNow_XS;
+	tempMin_XS = tempNow_XS;
+	// -------------------------------------------------------
+
+
+	if(flag_5min)
+	{
+		flag_5min = 0;
+
+		tempNow = getAirTemperature();
+		tempNow_XS = (uint8_t) 255.0*(tempNow+2.0)/51.0;
+
+		// in 5 min interval -------------------------------------
+		for(i=(nTempDay-1);i>0;i--)
+		{
+			temperature_Day[i] = temperature_Day[i-1];
+		}
+		temperature_Day[0] = tempNow_XS;
+
+		// mean
+		tempMean = (tempMean+tempNow)/2.0;
+	}
+
+//	if(flag_dayRefresh)
+	{
+		// at the and of day write the max and min values of day ---
+		for(i=0;i<nTempDay;i++)
+		{
+			if(tempMax_XS<temperature_Day[i])
+			{
+				tempMax_XS = temperature_Day[i];
+			}
+
+			if(tempMin_XS>temperature_Day[i])
+			{
+				tempMin_XS = temperature_Day[i];
+			}
+		}
+
+		uint8_t tempAux;
+		for(i=(nTempMonth-1);i>0;i--)
+		{
+			temperature_Max[i] = temperature_Max[i-1];
+			tempAux = eeprom_read_byte((uint8_t *)(i-1+addr_tempMax));
+			eeprom_write_byte(( uint8_t *)(i+addr_tempMin), tempAux);
+
+			temperature_Min[i] = temperature_Min[i-1];
+			tempAux = eeprom_read_byte((uint8_t *)(i-1+addr_tempMin));
+			eeprom_write_byte(( uint8_t *)(i+addr_tempMin), tempAux);
+
+			temperature_Mean[i] = temperature_Mean[i-1];
+			tempAux = eeprom_read_byte((uint8_t *)(i-1+addr_tempMean));
+			eeprom_write_byte(( uint8_t *)(i+addr_tempMean), tempAux);
+		}
+		temperature_Max[0] = tempMax_XS;
+		eeprom_write_byte(( uint8_t *)(addr_tempMax), tempMax_XS);
+
+		temperature_Min[0] = tempMin_XS;
+		eeprom_write_byte(( uint8_t *)(addr_tempMin), tempMin_XS);
+
+		temperature_Mean[0] = tempMean_XS;
+		eeprom_write_byte(( uint8_t *)(addr_tempMean), tempMean_XS);
+	}
+}
 
 int soilSensorRead()
 {
@@ -588,7 +844,9 @@ void motor_start()
 {
 	k1_on();
 	k3_on();
+	wdt_reset();
 	_delay_ms(5000);
+	wdt_reset();
 
 	k3_off();
 	uint32_t count = 0;
@@ -601,7 +859,6 @@ void motor_start()
 			k2_off();
 			k3_off();
 			return;
-
 		}
 	}
 	_delay_ms(75);
@@ -818,50 +1075,50 @@ void SIM900_sendmail()
 
 	sprintf(mailCommand,"AT+EMAILCID=1\r");
 	Serial2.println(mailCommand);
-	delay(10);
+	_delay_ms(10);
 
 	sprintf(mailCommand,"AT+EMAILTO= time_out\r");
 	Serial2.println(mailCommand);
-	delay(10);
+	_delay_ms(10);
 
 	sprintf(mailCommand,"AT+SMTPSRV=\"smtp.mail.yahoo.com.br\",587\r");
 	Serial2.println(mailCommand);
-	delay(10);
+	_delay_ms(10);
 
 	sprintf(mailCommand,"AT+SMTPAUTH=1,\"thmalmeida@yahoo.com.br\",\"c4ch0r4p0dr3\"\r");
 	Serial2.println(mailCommand);
-	delay(10);
+	_delay_ms(10);
 
 	sprintf(mailCommand,"AT+SMTPFROM=\"thmalmeida@yahoo.com.br\",\"Escravo-GPRS\"\r");
 	Serial2.println(mailCommand);
-	delay(10);
+	_delay_ms(10);
 
 	sprintf(mailCommand,"AT+SMTPRCPT=0,0,\"thmalmeida@gmail.com\",\"Thiago\"\r");
 	Serial2.println(mailCommand);
-	delay(10);
+	_delay_ms(10);
 
 	sprintf(mailCommand,"AT+SMTPSUB=\"TEST_GPRS\"\r");
 	Serial2.println(mailCommand);
-	delay(10);
+	_delay_ms(10);
 
 	sprintf(mailCommand,"AT+SMTPBODY\r");
 	Serial2.println(mailCommand);
-	delay(10);
+	_delay_ms(10);
 
 	sprintf(mailCommand,"AT+SMTPRCPT=0,0,\"thmalmeida@gmail.com\",\"Thiago\"\r");
 	Serial2.println(mailCommand);
-	delay(10);
+	_delay_ms(10);
 
 	sprintf(mailCommand,"Acho que funcionou!\r");
 	Serial2.println(mailCommand);
-	delay(10);
+	_delay_ms(10);
 
 	Serial2.println(0x1A,HEX);
-	delay(100);
+	_delay_ms(100);
 
 	sprintf(mailCommand,"AT+SMTPSEND\r");
 	Serial2.println(mailCommand);
-	delay(10);
+	_delay_ms(10);
 
 	free(mailCommand);
 }
@@ -912,32 +1169,34 @@ void SIM900_GPRS_Connect()
 	sprintf(gprsCommand,"AT+CIPMUX=0\r");
 	Serial2.println(gprsCommand);
 	Serial.println(gprsCommand);
-	delay(250);
+	_delay_ms(250);
 
 	sprintf(gprsCommand,"AT+CIPMODE=0\r");
 	Serial2.println(gprsCommand);
 	Serial.println(gprsCommand);
-	delay(200);
+	_delay_ms(200);
 
 	sprintf(gprsCommand,"AT+CSTT=\"zap.vivo.com.br\",\"vivo\",\"vivo\"\r");
 	Serial2.println(gprsCommand);
 	Serial.println(gprsCommand);
-	delay(500);
+	_delay_ms(500);
 
 	sprintf(gprsCommand,"AT+CIICR\r");
 	Serial2.println(gprsCommand);
 	Serial.println(gprsCommand);
-	delay(5000);
+	wdt_reset();
+	_delay_ms(5000);
+	wdt_reset();
 
 	sprintf(gprsCommand,"AT+CIFSR\r");
 	Serial2.println(gprsCommand);
 	Serial.println(gprsCommand);
-	delay(250);
+	_delay_ms(250);
 
 	sprintf(gprsCommand,"AT+CIPSTATUS=?\r");
 	Serial2.println(gprsCommand);
 	Serial.println(gprsCommand);
-	delay(250);
+	_delay_ms(250);
 
 	free(gprsCommand);
 }
@@ -959,12 +1218,11 @@ void SIM900_getIpAddress()
 	sprintf(gprsCommand,"AT+CIPSTATUS=?\r");
 	Serial2.println(gprsCommand);
 	Serial.println(gprsCommand);
-	delay(250);
+	_delay_ms(250);
 
 	sprintf(gprsCommand,"AT+CIFSR\r");
 	Serial2.println(gprsCommand);
 	Serial.println(gprsCommand);
-	delay(250);
 
 	free(gprsCommand);
 }
@@ -975,7 +1233,6 @@ void SIM900_TCP_Server_Start()
 
 	sprintf(tcpServerCommand,"AT+CIPSERVER=1,\"1234\"\r");
 	Serial2.println(tcpServerCommand);
-	delay(500);
 
 	free(tcpServerCommand);
 
@@ -997,17 +1254,17 @@ void SIM900_sendSMS_OLD(char *smsbuffer)
 //	sprintf(smsCommand,"AT+CMGF=1\r");	//Because we want to send the SMS in text mode
 //	Serial2.println(smsCommand);
 	Serial2.println("AT+CMGF=1\r");
-	delay(250);
+	_delay_ms(250);
 
 //	sprintf(smsCommand,"AT+CMGS=\"%s\"",celPhoneNumber_str);
 //	Serial2.println(smsCommand);
 	Serial2.println("AT+CMGS=\"27988081875\"");//send sms message, be careful need to add a country code before the cellphone number
-	delay(250);
+	_delay_ms(250);
 	Serial2.println(smsbuffer);//the content of the message
 
-	delay(1000);
+	_delay_ms(1000);
 	Serial2.println((char)26);//the ASCII code of the ctrl+z is 26
-	delay(250);
+	_delay_ms(250);
 	Serial2.println();
 
 //	free(smsCommand);
@@ -1015,16 +1272,16 @@ void SIM900_sendSMS_OLD(char *smsbuffer)
 void SIM900_sendSMS(char *smsbuffer)
 {
 	Serial2.println("AT+CMGF=1\r");
-	delay(250);
+	_delay_ms(250);
 
 	Serial2.println("AT+CMGS=\"27988081875\"");//send sms message, be careful need to add a country code before the cellphone number
-	delay(250);
+	_delay_ms(250);
 
 	Serial2.println(smsbuffer);//the content of the message
-	delay(1000);
+	_delay_ms(1000);
 
 	Serial2.println((char)26);//the ASCII code of the ctrl+z is 26
-	delay(250);
+	_delay_ms(250);
 
 	Serial2.println();
 
@@ -1038,17 +1295,21 @@ void SIM900_sendSMS(char *smsbuffer)
 }
 void SIM900_power()	// GSM AND GPRS Functions
 {
+	wdt_reset();
 	pinMode(9, OUTPUT);
 	digitalWrite(9,LOW);
-	delay(1000);
+	_delay_ms(1000);
 	digitalWrite(9,HIGH);
-	delay(2000);
+	wdt_reset();
+	_delay_ms(2000);
 	digitalWrite(9,LOW);
-	delay(3000);
+	wdt_reset();
+	_delay_ms(7000);
+	wdt_reset();
 
-	delay(3000);
-	sprintf(buffer,"SIM900 Turned On!");
-	SIM900_sendSMS(buffer);
+//	wdt_reset();
+//	strcpy(buffer,"SIM900 Turned On!");
+//	SIM900_sendSMS(buffer);
 }
 void SIM900_reset()
 {
@@ -1056,46 +1317,40 @@ void SIM900_reset()
 	_delay_ms(20);
 	PORTH &= ~(1<<PH5);
 }
-void  SIM900_checkAlive()
+void SIM900_checkAlive()
 {
-	if(flag_SIM900_died)
-	{
-		SIM900_power();
-		flag_SIM900_died = 0;
-	}
-	else
-	{
-		Serial2.println("AT");
-		_delay_ms(250);
+	Serial2.println("AT");
 
-		flag_SIM900_checkAlive = 1;
-		count_SIM900_timeout = 0;
-		j1 = 0;
-	}
+	flag_SIM900_checkAlive = 1;
+	count_SIM900_timeout = 0;
 }
 
 void thermalSafe()
 {
-	if(Th_read)
+	if(motorStatus||k1_read)
 	{
-		if(!flag_Th)
+		if(Th_read)
 		{
-			flag_Th = 1;
+			if(!flag_Th)
+			{
+				flag_Th = 1;
 
-			turnAll_OFF();
-			stateMode = manual;
-			strcpy(buffer,"Rele Sobrecarga!");
-			SIM900_sendSMS(buffer);
+				turnAll_OFF();
+				stateMode = manual;
+				strcpy(buffer,"Rele Sobrecarga!");
+				SIM900_sendSMS(buffer);
+			}
 		}
-	}
-	else
-	{
-		flag_Th = 0;
+		else
+		{
+			flag_Th = 0;
+		}
 	}
 }
 
 uint8_t valveInstrSafe(uint8_t sectorPrivate, uint8_t instruction)
 {
+	wdt_reset();
 	uint8_t changed = 0;
 	float Ia0=0.0, Ib0=0.0, Ic0=0.0, Ia1=0.0, Ib1=0.0, Ic1=0.0;
 	int Im0=0, Im1=0;
@@ -1113,7 +1368,7 @@ uint8_t valveInstrSafe(uint8_t sectorPrivate, uint8_t instruction)
 
 	// Set valve instruction
 	valveInstr(sectorPrivate, instruction);
-	_delay_ms(300);
+	_delay_ms(200);
 
 	// Take a measure after turn on
 	Ia1 = calcIrms();	// Read currently current;
@@ -1161,6 +1416,7 @@ uint8_t valveTest(uint8_t sectorPrivate)
 //	while(!status||!limit)
 //	{
 	do{
+		wdt_reset();
 		// Measurement of current without load
 		I0a = calcIrms();	// Read currently current;
 		_delay_ms(100);
@@ -1208,6 +1464,7 @@ void verifyAllValves()
 }
 void verifyValve()
 {
+	wdt_reset();
 	if(motorStatus)
 	{
 		float Ia=0.0, Ib=0.0, Ic=0.0;
@@ -1242,6 +1499,7 @@ uint8_t verifyNextValve(uint8_t sectorPrivate)
 
 	while(Im<=I0m)
 	{
+		wdt_reset();
 //		sprintf(buffer,"-- Sector[%d] --:",sectorPrivate+i);
 //		Serial1.println(buffer);
 		I0a = calcIrms();	// Read currently current;
@@ -1263,7 +1521,7 @@ uint8_t verifyNextValve(uint8_t sectorPrivate)
 
 
 		valveInstr(sectorPrivate+i,1);
-		_delay_ms(1000);
+		_delay_ms(500);
 
 		Ia = calcIrms();	// Read currently current;
 		_delay_ms(100);
@@ -1326,7 +1584,6 @@ uint8_t verifyNextValve(uint8_t sectorPrivate)
 	return nextSector;
 }
 
-
 void process_OnlyOneSector()
 {
 	// 1- Check valve working before start motor
@@ -1388,7 +1645,7 @@ void process_Working()
 			valveInstr(stateSector,1);
 			motor_start();
 
-			_delay_ms(100);
+			_delay_ms(200);
 			GLCD.Init();
 
 			flag_sector = 0;
@@ -1508,7 +1765,6 @@ void process_Mode()
 	}
 }
 
-
 void periodVerify0()
 {
 	if (((tm.Hour == HourOn) && (tm.Minute >= MinOn)) || (tm.Hour > HourOn)
@@ -1531,11 +1787,34 @@ void periodVerify0()
 }
 void refreshVariables()
 {
+//	wdt_reset();
+//	temperature = getAirTemperature();
+//	Serial.println(temperature);
+////		TODO Soil Humidity Sensor
+//	sprintf(buffer,"Hum. Solo: %.4d",soilSensorRead());
+//	GLCD.CursorTo(0,7);
+//	GLCD.print(buffer);
+
+	thermalSafe();
+
+	if(flag_reset)
+	{
+		wdt_enable(WDTO_15MS);
+		_delay_ms(100);
+	}
+
+	if(flag_5min)
+	{
+		flag_5min = 0;
+		count_5min = 300;
+		tempNow = getAirTemperature();
+	}
+
 	if(flag_30s)
 	{
-		SIM900_checkAlive();
 		flag_30s = 0;
-		count30s = 30;
+
+		SIM900_checkAlive();
 	}
 
 	if (flag_1s)
@@ -1550,7 +1829,7 @@ void refreshTimeSectors()
 {
 	int i;
 	for(i=0;i<11;i++)
-		timeSectorVectorMin[i] = eeprom_read_byte((uint8_t *)(i+1+10));
+		timeSectorVectorMin[i] = eeprom_read_byte((uint8_t *)(i+addr_timeSector));
 }
 void refreshCelPhoneNumber()
 {
@@ -1558,7 +1837,7 @@ void refreshCelPhoneNumber()
 	uint8_t flag_Error01 = 0;
 	for(i=0;i<11;i++)
 	{
-		if(eeprom_read_byte((uint8_t *)(i+23))>9)
+		if(eeprom_read_byte((uint8_t *)(i+addr_celNumber))>9)
 		{
 			flag_Error01 = 1;
 //			eeprom_write_byte(( uint8_t *)(i+23), 9);
@@ -1568,14 +1847,14 @@ void refreshCelPhoneNumber()
 	if(!flag_Error01)
 	{
 		for(i=0;i<11;i++)
-			celPhoneNumber[i] = eeprom_read_byte((uint8_t *)(i+23));
+			celPhoneNumber[i] = eeprom_read_byte((uint8_t *)(i+addr_celNumber));
 
 		sprintf(celPhoneNumber_str,"%d%d%d%d%d%d%d%d%d%d%d",celPhoneNumber[0],celPhoneNumber[1],celPhoneNumber[2],celPhoneNumber[3],celPhoneNumber[4],celPhoneNumber[5],celPhoneNumber[6],celPhoneNumber[7],celPhoneNumber[8],celPhoneNumber[9],celPhoneNumber[10]);
 	}
 	else
 	{
 		strcpy(celPhoneNumber_str,"27988087504");
-		sprintf(buffer,"Error!");
+		sprintf(buffer,"CEL Error!");
 		SIM900_sendSMS(buffer);
 		Serial1.println("Error!");
 	}
@@ -1598,7 +1877,7 @@ void comm_SIM900()
 //			Serial.println("Frame Start!");
 		}
 
-		if(flag_frameStartSIM900||flag_SIM900_checkAlive)
+		if(flag_frameStartSIM900)
 		{
 			sInstrSIM900[j1] = inChar;
 //			Serial.write(sInstrSIM900[j1]);
@@ -1625,16 +1904,22 @@ void comm_SIM900()
 			}
 		}
 
-		if(flag_SIM900_checkAlive)
-		{
-			if(inChar=='K')
-			{
-				enableSIM900_checkAliveCompare = 1;
-				flag_SIM900_checkAlive = 0;
-				count_SIM900_timeout = 0;
-				j1 = 0;
-			}
-		}
+
+		// Variables for check if SIM900 is alive.
+		flag_SIM900_checkAlive = 0;
+		count_SIM900_timeout = 0;
+		count_30s = 0;
+
+//		if(flag_SIM900_checkAlive)
+//		{
+//			if(inChar=='K')
+//			{
+//				enableSIM900_checkAliveCompare = 1;
+//				flag_SIM900_checkAlive = 0;
+//				count_SIM900_timeout = 0;
+//				j1 = 0;
+//			}
+//		}
 	}
 
 	// PC to SIM900
@@ -1681,129 +1966,33 @@ void comm_SIM900()
 	{
 		if(count_SIM900_timeout > 5)
 		{
-			flag_SIM900_died = 1;
 			flag_SIM900_checkAlive = 0;
+			count_SIM900_timeout = 0;
 			Serial.println("SIM900 Check Alive TIMEOUT!");
+
+			SIM900_power();
 		}
 	}
 
-	if(enableSIM900_checkAliveCompare)
-	{
-		enableSIM900_checkAliveCompare = 0;
-		j1 = 0;
-
-		char *p;
-		p = strchr(sInstrSIM900,'O');
-
-		if(p[0] == 'O' && p[1] == 'K')
-		{
-			flag_SIM900_died = 0;
-			Serial.println("Alive!");
-		}
-		else
-		{
-			Serial.println("Is DEAD??");
-//			flag_SIM900_died = 1;
-		}
-	}
-}
-void comm_SIM900_old1()
-{
-	// Rx - Always listening
-	while((Serial2.available()>0))	// Reading from serial
-	{
-		inChar = Serial2.read();
-		sInstrSIM900[k] = inChar;
-		k++;
-
-		if(k>=sInstrSIM900_Length)
-		{
-			memset(sInstrSIM900,0,sizeof(sInstrSIM900));
-			k=0;
-			Serial.println("ZEROU! SIM900 BUFFER!");
-		}
-		Serial.write(inChar);
-//		memset(buffer,0,sizeof(buffer));
-//		sprintf(buffer,"K= %d",k);
-//		Serial.println(buffer);
-
-		if(inChar==';')
-		{
-			enableTranslate_SIM900 = 1;
-			k = 0;
-			Serial.println(sInstrSIM900);
-		}
-
-		if(flag_SIM900_checkAlive)
-		{
-			if(inChar=='K')
-			{
-				enableSIM900_checkAliveCompare = 1;
-				flag_SIM900_checkAlive = 0;
-				count_SIM900_timeout = 0;
-				k = 0;
-			}
-		}
-	}
-
-//	// PC to SIM900
-	while(Serial.available() > 0)
-		Serial2.write(Serial.read());
-
-	// Special Functions ------------------------------
-	if(enableTranslate_SIM900)
-	{
-		Serial.println("enableTranslate_SIM900 = 1");
-		enableTranslate_SIM900 = 0;
-
-		char *pi, *pf;
-		pi = strchr(sInstrSIM900,'$');
-		pf = strchr(sInstrSIM900,';');
-
-		uint8_t l=0;
-		l = pf - pi;
-
-		int i;
-		for(i=1;i<=l;i++)
-		{
-			sInstr[i-1] = pi[i];
-//			Serial.write(sInstr[i-1]);
-		}
-		Serial.println(sInstr);
-
-		enableDecode = 1;
-		enableSIM900_Send = 1;
-	}
-
-	// Special Functions  CHECK ALIVE!
-	if(flag_SIM900_checkAlive)
-	{
-		if(count_SIM900_timeout > 5)
-		{
-			flag_SIM900_died = 1;
-			flag_SIM900_checkAlive = 0;
-			Serial.println("SIM900 Check Alive TIMEOUT!");
-		}
-	}
-
-	if(enableSIM900_checkAliveCompare)
-	{
-		enableSIM900_checkAliveCompare = 0;
-
-		char *p;
-		p = strchr(sInstrSIM900,'O');
-
-		if(p[0] == 'O' && p[1] == 'K')
-		{
-			flag_SIM900_died = 0;
-			Serial.println("Alive!");
-		}
-		else
-		{
-			Serial.println("Is DEAD??");
-//			flag_SIM900_died = 1;
-		}
-	}
+//	if(enableSIM900_checkAliveCompare)
+//	{
+//		enableSIM900_checkAliveCompare = 0;
+//		j1 = 0;
+//
+//		char *p;
+//		p = strchr(sInstrSIM900,'O');
+//
+//		if(p[0] == 'O' && p[1] == 'K')
+//		{
+//			flag_SIM900_died = 0;
+//			Serial.println("Alive!");
+//		}
+//		else
+//		{
+//			Serial.println("Is DEAD??");
+////			flag_SIM900_died = 1;
+//		}
+//	}
 }
 void comm_SIM900_SerialPC()
 {
@@ -1895,7 +2084,7 @@ void comm_Bluetooth()
 		}
 		else
 		{
-			Serial1.println("Error!!");
+			Serial1.println("Error BT!!");
 			Serial1.write(pi0[0]);
 			Serial1.write(pf0[0]);
 		}
@@ -1949,7 +2138,7 @@ void summary_Print(uint8_t opt)
 			break;
 
 		case 3:
-			sprintf(buffer,"Motor: %d, Time: %.2d:%.2d:%.2d,", motorStatus, tm.Hour, tm.Minute, tm.Second);
+			sprintf(buffer,"Motor: %d, K1: %d, Flag_Th.: %d, Rth.: %d, Per.: %d, Time: %.2d:%.2d:%.2d,", motorStatus, k1_read, flag_Th, Th_read, flag_timeMatch, tm.Hour, tm.Minute, tm.Second);
 			if(enableSIM900_Send)
 			{
 				enableSIM900_Send = 0;
@@ -1974,8 +2163,22 @@ void summary_Print(uint8_t opt)
 			}
 			break;
 
+		case 5:
+			sprintf(buffer,"Time: %.2d:%.2d:%.2d, Temp: %d",tm.Hour, tm.Minute, tm.Second, (int) (tempNow*10));
+			if(enableSIM900_Send)
+			{
+				enableSIM900_Send = 0;
+				SIM900_sendSMS(buffer);
+			}
+			else
+			{
+				Serial1.println(buffer);
+			}
+
+			break;
+
 		case 9:
-			sprintf(buffer,"Error!");
+			sprintf(buffer,"Error 09!");
 			if(enableSIM900_Send)
 			{
 				enableSIM900_Send = 0;
@@ -2076,7 +2279,9 @@ void handleMessage()
 					{
 						case 8:
 							SIM900_reset();
-							count30s = 30;
+							flag_SIM900_checkAlive = 0;
+							flag_SIM900_died = 0;
+							count_30s = 0;
 							break;
 
 						case 9:
@@ -2215,7 +2420,9 @@ void handleMessage()
 
 					if(enableSIM900_Send)
 					{
+						wdt_reset();
 						_delay_ms(5000);
+						wdt_reset();
 					}
 
 					sectorChanged = valveInstrSafe(sector, sectorCommand);
@@ -2249,7 +2456,7 @@ void handleMessage()
 					aux[2] = '\0';
 					sectorTimeChange = (uint8_t) atoi(aux);
 
-					eeprom_write_byte(( uint8_t *)(sector+10), sectorTimeChange);
+					eeprom_write_byte(( uint8_t *)(sector-1+addr_timeSector), sectorTimeChange);
 
 					refreshTimeSectors();
 					summary_Print(0);
@@ -2374,7 +2581,7 @@ void handleMessage()
 				{
 					for(i=0;i<11;i++)
 					{
-						eeprom_write_byte(( uint8_t *)(i+23), celPhoneNumber[i]);
+						eeprom_write_byte(( uint8_t *)(i+addr_celNumber), celPhoneNumber[i]);
 					}
 
 					refreshCelPhoneNumber();
@@ -2477,20 +2684,27 @@ void summary_GLCD()
 
 ISR(TIMER1_COMPA_vect)
 {
-	if(!flag_reset)
-	{
-		wdt_reset();
-	}
-
 	if(flag_SIM900_checkAlive)
 	{
 		count_SIM900_timeout++;
 	}
-
-	if(!count30s)
-		flag_30s = 1;
 	else
-		count30s--;
+	{
+		if(count_30s > 8)
+		{
+			count_30s = 0;
+			count_SIM900_timeout = 0;
+
+			flag_30s = 1;
+		}
+		else
+			count_30s++;
+	}
+
+	if(!count_5min)
+		flag_5min = 1;
+	else
+		count_5min--;
 
 	if(timeSector == 0)
 		flag_timeOVF = 1;
@@ -2511,7 +2725,7 @@ int main()
 	init_ADC();
 	init_SIM900();
 	init_Timer1_1Hz();
-//	init_WDT();
+	init_WDT();
 
 	GLCD.Init();
 	GLCD.SelectFont(SystemFont5x7);
@@ -2521,47 +2735,46 @@ int main()
 	Serial2.begin(9600);	// Connected to SIM900
 
 	// Welcome!
-	Serial1.println("- Raiden Controller Started! -");
+	Serial1.println("- Vassal Controller Started! -");
+	Serial.println("- Vassal Controller Started! -");
 
 	// Refresh
 	refreshTimeSectors();
-	refreshCelPhoneNumber();
+//	refreshCelPhoneNumber();
 
-	strcpy(buffer,"- Raiden Controller Started! -");
-	SIM900_sendSMS(buffer);
-
-	// WDT enable
-	wdt_enable(WDTO_4S);
+//	strcpy(buffer,"- Vassal Controller Started! -");
+//	SIM900_sendSMS(buffer);
 
 	// Program comes here
+//	float temperature;
+
 	while (1)
 {
-//		sprintf(buffer,"Hum. Solo: %.4d",soilSensorRead());
-//		GLCD.CursorTo(0,7);
-//		GLCD.print(buffer);
 		// Refresh all variables to compare and take decisions;
+		wdt_reset();
 		refreshVariables();
 
 		// Main process.
+		wdt_reset();
 		process_Mode();
 
 		// SIM900 <--> uC
 //		comm_SIM900_SerialPC();
 
 		// SIM900 <--> uC
+		wdt_reset();
 		comm_SIM900();
 
 		// Bluetooth communication
+		wdt_reset();
 		comm_Bluetooth();
 
 		// Message Manipulation
+		wdt_reset();
 		handleMessage();
 
 //		GLD Screen Informations
+		wdt_reset();
 		summary_GLCD();
-
-		thermalSafe();
-
-//		Serial.println(freeMemory());
 	}
 }
