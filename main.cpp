@@ -2218,27 +2218,62 @@ void summary_Print(uint8_t opt)
 
 void handleMessage()
 {
-/*	0;				Verificar detalhes - Detalhes simples (tempo).
-		00;				- Detalhes simples (tempo).
-		01;				- Relacao do status das valvulas (ligada ou desligada)
-		02;				- Numero do telefone.
+/*
+Comandos do ESCRAVO
 
-		08;				- Reseta SIM900.
-		09;				- Reseta o sistema.
+Ínicio do comando sempre com dólar $
+Fim do comando sempre com ponto vírgula ;
 
-	1123030;		Ajustar a hora para 12:30:30
-	201042014;		ajustar a data para 01 de abril de 2014
-	31;				ligar (31) ou desligar (30) o motor
-	4s01:1;			acionamento das valvulas
-	5t01:09;		tempo em minutos para cada setor
-	60;				Modo de funcionamento
-		60; 			- Manual
-		61;				- Liga todos os setores em sequencia a noite;
-		62:06;			- Executa automatico 1x por 6 minutos cada setor;
-		63:s01:23;		- Liga a noite somente o setor 1 durante 23 min.
-		69:s03;			- Testa o setor 3 se está funcionando e retorna msg;
-	727988081875;	Troca número de telefone
-	8;				Reinicializa o GLCD;
+$0X;				Verificar detalhes - Detalhes simples (tempo).
+	$00;			- Mostra o tempo ajustado de todos setores.
+	$01;			- Mostra a relação de quais válvulas estão ligadas ou desligadas;
+	$02;			- Número do telefone que manda o SMS de retorno;
+	$03;			- Variáveis do motor;
+	$04;			- Não implementado;
+	$05;			- Verifica a temperatura instantânea do ambiente;
+	$07;			- Liga/Desliga o SIM900;
+	$08;			- Reseta SIM900;
+	$09;			- Reinicia o sistema.
+
+	$1HHMMSS;		Ajusta o horário do sistema;
+	$1123040;		Ajustar a hora para 12:30:40
+
+$2DDMMAAAA;  		Ajusta a data do sistema no formato dia/mês/ano(4 dígitos);
+	$201042014;	Ajusta a data para 01 de abril de 2014;
+
+$3X;			Acionamento do motor;
+	$31;		liga (CUIDADO! Verifique se há válvula aberta antes de acionar o motor!);
+	$30;		desliga;
+
+$4sNN:V;		acionamento das válvulas sem verificação (Não é seguro!);
+$4s03:1;		- Liga o setor 3;
+	$4s10:0;		- Desliga o setor 4;
+	$4s12:1;		- Liga a válvula da fertirriação que enche a caixa;
+	$4s13:0;		- Desliga a válvula da fertirigação que esvazia a caixa;
+
+
+Função 4 com “c”: Testa se o setor 2 está funcionando, caso esteja, mantém o 02 ligado e desliga o setor anterior;
+
+$4cNN:V;		Modo seguro de acionamento (somente para válvulas dos piquetes);
+	$4c02:1;	- Liga o setor 2 e desliga setor anterior;
+	$4c03:1;	- Liga o setor 3 e desliga setor anterior;
+	$4c03:0;	- Desliga o setor 3 se estiver ligado;
+
+$5tNN:MM;		Coloca o tempo em minutos do determinado setor (2 dígitos);
+	$5t02:09;		- ajusta para 09 minutos o tempo do setor 02;
+	$5t11:54;		- ajusta para 54 minutos o tempo do setor 11;
+	$5t09:00;		- zera o setor 9 não deixando ligar à noite;
+
+$6X;		Modo de funcionamento
+	$60; 		- Coloca no modo manual (desligado). DESLIGA TODAS AS CARGAS!;
+	$61;		- Programa para ligar às 21:30 horas do mesmo dia.
+	$62:06;		- Executa automático 1x por 6 minutos cada setor;
+	$63:s01:23;	- Liga a noite somente o setor 1 durante 23 min.
+	$69:s03;	- Testa o setor 3 se está funcionando e retorna SMS;
+
+$727988081875;		Troca número de telefone
+
+$8;				Reinicializa o display GLCD do painel;
 */
 
 	// Tx - Transmitter
@@ -2277,6 +2312,11 @@ void handleMessage()
 				{
 					switch (statusCommand)
 					{
+						case 7:
+							SIM900_power();
+							Serial1.println("SIM900 Power!");
+						break;
+
 						case 8:
 							SIM900_reset();
 							flag_SIM900_checkAlive = 0;
