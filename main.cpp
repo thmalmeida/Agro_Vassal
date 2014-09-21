@@ -1447,11 +1447,10 @@ void summary_Print(uint8_t opt)
 			{
 				Serial1.println(buffer);
 			}
-
 			break;
 
-		case 9:
-			sprintf(buffer,"Error 09!");
+		case 6:
+			sprintf(buffer,"Setor Atual: %d, Tempo restante: %d", stateSector, timeSector);
 			if(enableSIM900_Send)
 			{
 				enableSIM900_Send = 0;
@@ -1461,7 +1460,21 @@ void summary_Print(uint8_t opt)
 			{
 				Serial1.println(buffer);
 			}
+
 			break;
+
+//		case 9:
+//			sprintf(buffer,"Error 09!");
+//			if(enableSIM900_Send)
+//			{
+//				enableSIM900_Send = 0;
+//				SIM900_sendSMS(buffer);
+//			}
+//			else
+//			{
+//				Serial1.println(buffer);
+//			}
+//			break;
 
 		default:
 
@@ -1695,6 +1708,9 @@ uint8_t verifyNextValve(uint8_t sectorPrivate)
 	int I0m=0, Im=0;
 	uint8_t i=0;
 
+	if(!sectorPrivate)
+		sectorPrivate = 1;
+
 	while(Im<=I0m)
 	{
 		wdt_reset();
@@ -1833,10 +1849,20 @@ void process_OnlyOneSector()
 }
 void process_Working()
 {
+	uint16_t timeAux = 0;
+
 	// 1- Check valve working before start motor
 	if(!motorStatus)
 	{
-		stateSector = verifyNextValve(1);
+
+		do{
+			stateSector = verifyNextValve(stateSector);
+			timeAux = timeSectorMemory(stateSector);
+
+			if(stateSector==0) // In the case verifyNextVale() returns 0 with all broken valves;
+				timeAux = 1;
+
+		}while(timeAux==0);
 
 		if(stateSector>0)
 		{
@@ -1917,7 +1943,7 @@ void process_Programmed()
 		{
 			turnAll_OFF();
 			stateMode = manual;
-			stateSector = 1;
+			stateSector = 0;
 		}
 	}
 }
@@ -2339,8 +2365,9 @@ $5tNN:MM;		Coloca o tempo em minutos do determinado setor (2 dígitos);
 $6X;		Modo de funcionamento
 	$60; 		- Coloca no modo manual (desligado). DESLIGA TODAS AS CARGAS!;
 	$61;		- Programa para ligar às 21:30 horas do mesmo dia.
-	$62:06;		- Executa automático 1x por 6 minutos cada setor;
-	$63:s01:23;	- Liga a noite somente o setor 1 durante 23 min.
+	$62:s01:23;	- Liga a noite somente o setor 1 durante 23 min.
+	$63:06;		- Executa automático 1x por 6 minutos cada setor;
+
 	$69:s03;	- Testa o setor 3 se está funcionando e retorna SMS;
 
 $727988081875;		Troca número de telefone
@@ -2597,7 +2624,7 @@ $8;				Reinicializa o display GLCD do painel;
 							flag_timeMatch = 0;
 							timeSector = 0;
 							turnAll_OFF();
-							stateSector = 1;
+							stateSector = 0;
 						}
 						break;
 
@@ -2606,7 +2633,36 @@ $8;				Reinicializa o display GLCD do painel;
 						break;
 
 					case 2:
+						// Turn on just one sector at night.
+						//	62:s01:30;
+						if((sInstr[2] == ':')&&(sInstr[3] == 's'))
+						{
+							aux[0] = sInstr[4];
+							aux[1] = sInstr[5];
+							aux[2] = '\0';
+							onlyValve = (uint8_t) atoi(aux);
 
+							if(sInstr[6] == ':')
+							{
+								aux[0] = sInstr[7];
+								aux[1] = sInstr[8];
+								aux[2] = '\0';
+								timeSectorSet = 60*((uint16_t) atoi(aux));
+
+								stateMode = onlyOneSector;
+							}
+						}
+						if(sInstr[2] == ':')
+						{
+							aux[0] = sInstr[3];
+							aux[1] = sInstr[4];
+							aux[2] = '\0';
+							timeSectorSet = 60*((uint16_t) atoi(aux));
+						}
+						stateMode = automatic;
+						break;
+
+					case 3:
 						if(sInstr[2] == ':')
 						{
 
@@ -2616,31 +2672,8 @@ $8;				Reinicializa o display GLCD do painel;
 							timeSectorSet = 60*((uint16_t) atoi(aux));
 
 						}
-
 						stateMode = automatic;
-
 						break;
-
-					case 3:	// Turn on just one sector at night.
-	//				63:s01:30;
-					if((sInstr[2] == ':')&&(sInstr[3] == 's'))
-					{
-						aux[0] = sInstr[4];
-						aux[1] = sInstr[5];
-						aux[2] = '\0';
-						onlyValve = (uint8_t) atoi(aux);
-
-						if(sInstr[6] == ':')
-						{
-							aux[0] = sInstr[7];
-							aux[1] = sInstr[8];
-							aux[2] = '\0';
-							timeSectorSet = 60*((uint16_t) atoi(aux));
-
-							stateMode = onlyOneSector;
-						}
-					}
-					break;
 
 					case 9:	// Testing mode
 	//				69:s01;
