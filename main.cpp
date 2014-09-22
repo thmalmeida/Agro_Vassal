@@ -1093,6 +1093,11 @@ void turnAll_OFF()
 		valveInstr(i,0);
 	}
 
+	flag_timeMatch = 0;
+	stateMode = manual;
+
+	timeSector = 0;
+	stateSector = 0;
 	sectorCurrently = 0;
 }
 
@@ -1502,6 +1507,21 @@ void summary_Print(uint8_t opt)
 	}
 }
 
+void valveOpenedVerify()
+{
+	if(motorStatus||k1_read)
+	{
+		uint8_t status = 0,i;
+
+		for(i=0;i<=11;i++)
+			status |= valveStatus[i];
+
+		if(!status)
+		{
+			turnAll_OFF();
+		}
+	}
+}
 void thermalSafe()
 {
 	if(motorStatus||k1_read)
@@ -1518,7 +1538,6 @@ void thermalSafe()
 			Serial1.println("Thermal Stop");
 			if(!countThermal)
 			{
-				stateMode = manual;
 				flag_Th = 1;
 				turnAll_OFF();
 
@@ -1535,29 +1554,28 @@ void thermalSafe()
 		}
 	}
 }
-
-void thermalSafe2()
-{
-	if(motorStatus||k1_read)
-	{
-		if(Th_read)
-		{
-			if(!flag_Th)
-			{
-				flag_Th = 1;
-
-				turnAll_OFF();
-				stateMode = manual;
-				strcpy(buffer,"Rele Sobrecarga!");
-				SIM900_sendSMS(buffer);
-			}
-		}
-		else
-		{
-			flag_Th = 0;
-		}
-	}
-}
+//void thermalSafe2()
+//{
+//	if(motorStatus||k1_read)
+//	{
+//		if(Th_read)
+//		{
+//			if(!flag_Th)
+//			{
+//				flag_Th = 1;
+//
+//				turnAll_OFF();
+//
+//				strcpy(buffer,"Rele Sobrecarga!");
+//				SIM900_sendSMS(buffer);
+//			}
+//		}
+//		else
+//		{
+//			flag_Th = 0;
+//		}
+//	}
+//}
 
 uint8_t valveInstrSafe(uint8_t sectorPrivate, uint8_t instruction)
 {
@@ -1784,12 +1802,6 @@ uint8_t verifyNextValve(uint8_t sectorPrivate)
 			sprintf(buffer,"Time: %.2d:%.2d:%.2d, %.2d/%.2d/%d \n Sistema Desligado!",tm.Hour, tm.Minute, tm.Second, tm.Day, tm.Month, tmYearToCalendar(tm.Year));
 			SIM900_sendSMS(buffer);
 
-			flag_timeMatch = 0;
-
-//			if(stateMode == automatic)
-			stateMode = manual;
-
-
 //			sprintf(buffer_SIM900,"Time: %.2d:%.2d:%.2d, %.2d/%.2d/%d \n System Stoped!",tm.Hour, tm.Minute, tm.Second, tm.Day, tm.Month, tmYearToCalendar(tm.Year));
 //			SIM900_sendSMS(buffer_SIM900);
 		}
@@ -1826,7 +1838,6 @@ void process_OnlyOneSector()
 			Serial1.println("Out of order!");
 			stateMode = manual;
 		}
-
 	}
 
 	// Verifica o proximo setor
@@ -1834,11 +1845,9 @@ void process_OnlyOneSector()
 	{
 		flag_sector = 0;
 		flag_timeOVF = 0;
-		timeSector = 10;		// Para nao gerar interrupcao e voltar aqui de novo pulando setor
 
 		turnAll_OFF();
-		flag_timeMatch = 0;
-		stateMode = manual;
+		timeSector = 10;		// Para nao gerar interrupcao e voltar aqui de novo pulando setor
 
 		sprintf(buffer,"Time: %.2d:%.2d:%.2d, %.2d/%.2d/%d \n Sistema Desligado!",tm.Hour, tm.Minute, tm.Second, tm.Day, tm.Month, tmYearToCalendar(tm.Year));
 		SIM900_sendSMS(buffer);
@@ -1942,8 +1951,6 @@ void process_Programmed()
 		if(motorStatus)
 		{
 			turnAll_OFF();
-			stateMode = manual;
-			stateSector = 0;
 		}
 	}
 }
@@ -2018,6 +2025,8 @@ void refreshVariables()
 //	GLCD.print(buffer);
 
 	thermalSafe();
+
+	valveOpenedVerify();
 
 	if(flag_reset)
 	{
@@ -2344,18 +2353,17 @@ $3X;			Acionamento do motor;
 	$30;		desliga;
 
 $4sNN:V;		acionamento das válvulas sem verificação (Não é seguro!);
-$4s03:1;		- Liga o setor 3;
-	$4s10:0;		- Desliga o setor 4;
-	$4s12:1;		- Liga a válvula da fertirriação que enche a caixa;
-	$4s13:0;		- Desliga a válvula da fertirigação que esvazia a caixa;
+$4f03:1;		- Liga o setor 3;
+	$4f10:0;		- Desliga o setor 4;
+	$4f12:1;		- Liga a válvula da fertirriação que enche a caixa;
+	$4f13:0;		- Desliga a válvula da fertirigação que esvazia a caixa;
 
+Função 4 com “s”: Testa se o setor 2 está funcionando, caso esteja, mantém o 02 ligado e desliga o setor anterior;
 
-Função 4 com “c”: Testa se o setor 2 está funcionando, caso esteja, mantém o 02 ligado e desliga o setor anterior;
-
-$4cNN:V;		Modo seguro de acionamento (somente para válvulas dos piquetes);
-	$4c02:1;	- Liga o setor 2 e desliga setor anterior;
-	$4c03:1;	- Liga o setor 3 e desliga setor anterior;
-	$4c03:0;	- Desliga o setor 3 se estiver ligado;
+$4sNN:V;		Modo seguro de acionamento (somente para válvulas dos piquetes);
+	$4s02:1;	- Liga o setor 2 e desliga setor anterior;
+	$4s03:1;	- Liga o setor 3 e desliga setor anterior;
+	$4s03:0;	- Desliga o setor 3 se estiver ligado;
 
 $5tNN:MM;		Coloca o tempo em minutos do determinado setor (2 dígitos);
 	$5t02:09;		- ajusta para 09 minutos o tempo do setor 02;
@@ -2525,7 +2533,7 @@ $8;				Reinicializa o display GLCD do painel;
 
 // -----------------------------------------------------------------
 			case 4:	// ON OFF sectors
-				if(sInstr[1] == 's')
+				if(sInstr[1] == 'f')
 				{
 					aux[0] = sInstr[2];
 					aux[1] = sInstr[3];
@@ -2543,7 +2551,7 @@ $8;				Reinicializa o display GLCD do painel;
 					summary_Print(4);
 				}
 
-				if(sInstr[1] == 'c')
+				if(sInstr[1] == 's')
 				{
 					aux[0] = sInstr[2];
 					aux[1] = sInstr[3];
@@ -2572,9 +2580,6 @@ $8;				Reinicializa o display GLCD do painel;
 					}
 
 					summary_Print(4);
-
-//					sprintf(buffer,"Sector%.2d: [%d], Time: %.2d:%.2d:%.2d,",sector, sectorCommand, tm.Hour, tm.Minute, tm.Second);
-//					Serial1.println(buffer);
 				}
 				break;
 
@@ -2617,15 +2622,7 @@ $8;				Reinicializa o display GLCD do painel;
 				switch (setCommand)
 				{
 					case 0:
-						stateMode = manual;
 						turnAll_OFF();
-						if(motorStatus)
-						{
-							flag_timeMatch = 0;
-							timeSector = 0;
-							turnAll_OFF();
-							stateSector = 0;
-						}
 						break;
 
 					case 1:
@@ -2883,24 +2880,13 @@ int main()
 
 //	// Welcome!
 	Serial1.println("- Vassal Controller Started! -");
-//	Serial.println("- Vassal Controller Started! -");
 
 //	// Refresh
 	refreshTimeSectors();
 	refreshCelPhoneNumber();
 
-//	DDRB |= (1<<PB7);
-
 	while (1)
 	{
-//		PORTB |= (1<<PB7);
-//		Serial.println(saida);
-//		_delay_ms(2000);
-//
-//		PORTB &= ~(1<<PB7);
-//		Serial.println(saida);
-//		_delay_ms(2000);
-
 		// Refresh all variables to compare and take decisions;
 		wdt_reset();
 		refreshVariables();
