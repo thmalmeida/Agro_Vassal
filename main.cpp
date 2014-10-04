@@ -23,8 +23,10 @@ PH3 --> k1_read
 PE3 --> k3_read
 PH4 --> Th_read
 
-PF0 --> ADC Irms
-PF1 --> ADC Vrms
+PF0 --> (A0) ADC Irms
+PF1 --> (A1) ADC Vrms
+PF2	-->	(A2) ADC Pressure Sensor
+PF3 -->	(A3) ADC Reservoir Level
 PD1 --> SDA DS1307
 PD0 --> SDL DS1307
 
@@ -39,8 +41,10 @@ PD2 --> RX1 BT
 #include <avr/wdt.h>
 #include <util/delay.h>
 
-#include <Arduino.h>
 #include <string.h>
+#include <math.h>
+
+#include <Arduino.h>
 
 #include "fonts/SystemFont5x7.h"	// system font
 #include "glcd.h"    				// Graphics LCD library
@@ -173,10 +177,12 @@ uint8_t onlyValve = 0;
 //uint8_t motorStatus = 0;
 uint8_t valveStatus[13] = {0,0,0,0,0,0,0,0,0,0,0,0,0};
 uint8_t sector = 0;
-uint8_t sectorCurrently = 0;
+//uint8_t sectorCurrently = 0;
 uint8_t sectorRequired = 0;
 uint8_t sectorCommand = 0;
 uint8_t sectorChanged = 0;
+
+uint8_t flag_BrokenPipeVerify = 0;
 
 uint8_t flag_SIM900_checkAlive = 0;
 uint8_t flag_SIM900_died = 0;
@@ -187,6 +193,9 @@ int soilHumidity = 0;
 uint8_t flag_sector=1;
 volatile uint8_t flag_timeOVF=0;
 uint16_t sample = 0;
+
+// PRessure
+const uint8_t minPRess = 49;
 
 // Time decision variables
 uint8_t HourOn  = 21;
@@ -230,7 +239,15 @@ volatile uint8_t flag_5min = 1;
 volatile uint8_t count_30s = 0;
 volatile uint16_t count_5min = 300;
 
+volatile uint8_t flag_3min = 0;
+volatile uint16_t count_3min = 180;
+
 volatile uint8_t count_SIM900_timeout = 0;
+
+uint16_t levelSensor, levelSensor_d;
+int PRess;
+int Pdig=0;
+double QFlow = 0;
 
 void print2digits(int number)
 {
@@ -338,17 +355,16 @@ void init_ADC()
 	ADMUX &= ~(1<<REFS1);							// AVCC is the Vref
 	ADMUX |=  (1<<REFS0);
 
-	ADMUX &= ~(1<<ADLAR);							// Left Adjustment. To ADCH register.
+//	ADMUX |=  (1<<REFS0);							// Internal 2.56V reference
+//	ADMUX |=  (1<<REFS1);
 
+	ADMUX &= ~(1<<ADLAR);							// Left Adjustment. To ADCH register.
 
 	ADMUX &= ~(1<<MUX4);							// Select ADC0
 	ADMUX &= ~(1<<MUX3);
 	ADMUX &= ~(1<<MUX2);
 	ADMUX &= ~(1<<MUX1);
 	ADMUX &= ~(1<<MUX0);
-
-	ADMUX |=  (1<<REFS0);							// Internal 2.56V reference
-	ADMUX |=  (1<<REFS1);
 }
 void init_WDT()
 {
@@ -383,6 +399,121 @@ void stop_WDT()
 	/* Turn off WDT */
 	WDTCSR = 0x00;
 	sei();
+}
+
+void get_reservoirLevel()
+{
+	uint8_t low, high;
+	uint16_t value;
+	const uint16_t reference = 800;
+
+	// Select ADC0 - LL sensor
+	ADMUX |=  (1<<MUX1);				// Select ADC3
+	ADMUX |=  (1<<MUX0);
+
+	ADCSRA |= (1<<ADSC);				// Start conversion;
+	while (bit_is_set(ADCSRA, ADSC));	// wait until conversion done;
+
+	low  = ADCL;
+	high = ADCH;
+	value = (high << 8) | low;
+	levelSensor_d = value;
+
+	if(value<reference)
+		levelSensor = 1;
+	else
+		levelSensor = 0;
+}
+double get_Pressure()
+{
+	/*
+	Sensor details
+
+    Thread size : G 1/4" (BSP)
+    Sensor material:  Carbon steel alloy
+    Working voltage: 5 VDC
+    Output voltage: 0.5 to 4.5 VDC
+    Working Current: <= 10 mA
+    Working pressure range: 0 to  1.2 MPa
+    Maxi pressure: 2.4 MPa
+    Working temperature range: 0 to 100 graus C
+    Accuracy: ± 1.0%
+    Response time: <= 2.0 ms
+    Package include: 1 pc pressure sensor
+    Wires : Red---Power  +  Black---Power -   blue ---Pulse singal output
+
+
+    4.5 V___	   922___	1.2 MPa___	 12 Bar___	 120 m.c.a.___
+	  	  |				|			|			|				|
+	 	  |				|			|			|				|
+	 	  |				|			|			|				|
+	  out_|			Pd__|			|			|			Pa__|
+	 	  |				|			|			|				|
+	 	  |				|			|			|				|
+	 	  |				|			|			|				|
+		 _|_		   _|_		   _|_		   _|_			   _|_
+	0.5 V			103
+
+	(out-0.5)/(4.5-0.5) = 1024
+
+	(out-0.0)/(5-0) = (x-0)/(1024-0)
+
+	(Pd - 103)/(922-103) = (Pa - 0)/(120 - 0)
+	Pa = 120.0*Pd/(1024.0);
+
+	(xs - 0) = temp - (0)
+	(255 - 0)  +50 - (0)
+
+	Direct Conversion
+	xs = 255*(temp+0)/51
+	tempNow_XS = (uint8_t) 255.0*(tempNow+0.0)/51.0;
+
+	Inverse Conversion
+	temp = (TempMax*xs/255) - TempMin
+	tempNow = (uint8_t) ((sTempMax*tempNow_XS)/255.0 - sTempMin);
+    */
+
+	uint8_t low, high;
+	int Pd;
+	double Pa;
+
+	ADMUX |=  (1<<MUX1);				// Select ADC2
+	ADMUX &= ~(1<<MUX0);
+
+	ADCSRA |= (1<<ADSC);				// Start conversion;
+	while (bit_is_set(ADCSRA, ADSC));	// wait until conversion done;
+
+//		Serial.println((ADCH << 8) | ADCL);
+	low  = ADCL;
+	high = ADCH;
+
+	Pd = (high << 8) | low;
+
+	Pdig = Pd;
+	Pa = (120.0)*(Pd-102.4)/(921.6-102.4);
+//	(Pd - 103)/(922-103) = (Pa - 0)/(120 - 0);
+	return Pa;
+}
+int get_FlowCalc(int P)
+{
+	int i, Qf, n = 4;
+	double a[5] = {0.0104, 3.7232, -0.1054, 0.0012, 0.0};
+	double flow=0;
+
+//	flow =  a[3]*pow(P, 3);
+
+//	flow =  a[4]*pow(P, 4) + a[3]*pow(P, 3) + a[2]*pow(P, 2) + a[1]*pow(P, 1) + a[0]*pow(P, 0);
+
+//	for(i=0;i<=n;i++)
+//		flow = flow + a[i]*pow(P, i);
+
+//	for(i=0;i<=4;i++)
+//		QFlow = QFlow + a[i]*pow(Pa, i);
+
+
+	Qf = (int) flow;
+
+	return Qf;
 }
 
 float calcIrms_HQ()
@@ -762,7 +893,7 @@ void temperatureAnalysis()
 	uint8_t temperature_Avg[nTempMonth];
 	uint8_t temperature_Min[nTempMonth];
 
-	float tempMax, tempMin;
+//	float tempMax, tempMin;
 	float tempMean_XS, tempMax_XS, tempMin_XS;
 	uint8_t tempNow_XS;
 
@@ -896,13 +1027,11 @@ void motor_start()
 			return;
 		}
 	}
-	_delay_ms(75);
+	_delay_ms(150);
 	k2_on();
 
 	Serial1.print("Count = ");
 	Serial1.println(count);
-
-//	motorStatus = 1;
 }
 void motor_stop()
 {
@@ -1098,7 +1227,7 @@ void turnAll_OFF()
 
 	timeSector = 0;
 	stateSector = 0;
-	sectorCurrently = 0;
+//	sectorCurrently = 0;
 }
 
 uint16_t timeSectorMemory(uint8_t sectorPrivate)
@@ -1416,7 +1545,8 @@ void summary_Print(uint8_t opt)
 			break;
 
 		case 3:
-			sprintf(buffer,"Motor: %d, K1: %d, Flag_Th.: %d, Rth.: %d, Per.: %d, Time: %.2d:%.2d:%.2d,", motorStatus, k1_read, flag_Th, Th_read, flag_timeMatch, tm.Hour, tm.Minute, tm.Second);
+
+			sprintf(buffer,"Motor: %d, K1: %d, Flag_Th.: %d, Rth.: %d, Press: %d, Nivel: %d, Nd: %d, Is= %4.d mA, Per.: %d, Time: %.2d:%.2d:%.2d,", motorStatus, k1_read, flag_Th, Th_read, PRess, levelSensor, levelSensor_d, (int)(1000.0*calcIrms()), flag_timeMatch, tm.Hour, tm.Minute, tm.Second);
 			if(enableSIM900_Send)
 			{
 				enableSIM900_Send = 0;
@@ -1519,6 +1649,7 @@ void valveOpenedVerify()
 		if(!status)
 		{
 			turnAll_OFF();
+			Serial1.println("AND OP: no valves opened!");
 		}
 	}
 }
@@ -1530,16 +1661,17 @@ void thermalSafe()
 		{
 			summary_Print(3);
 			uint16_t countThermal = 50000;
-			Serial1.println("Thermal Start");
+//			Serial1.println("Thermal Start");
 			while(Th_read && countThermal)
 			{
 				countThermal--;
 			}
-			Serial1.println("Thermal Stop");
+//			Serial1.println("Thermal Stop");
 			if(!countThermal)
 			{
 				flag_Th = 1;
 				turnAll_OFF();
+				Serial1.println("Thermal Safe executed!");
 
 				strcpy(buffer,"Rele Sobrecarga!");
 				SIM900_sendSMS(buffer);
@@ -1554,28 +1686,43 @@ void thermalSafe()
 		}
 	}
 }
-//void thermalSafe2()
-//{
-//	if(motorStatus||k1_read)
-//	{
-//		if(Th_read)
-//		{
-//			if(!flag_Th)
-//			{
-//				flag_Th = 1;
-//
-//				turnAll_OFF();
-//
-//				strcpy(buffer,"Rele Sobrecarga!");
-//				SIM900_sendSMS(buffer);
-//			}
-//		}
-//		else
-//		{
-//			flag_Th = 0;
-//		}
-//	}
-//}
+void levelSafe()
+{
+	if(motorStatus)
+	{
+		if(!levelSensor)
+		{
+			turnAll_OFF();
+			Serial1.println("Reservoir Level Down!");
+		}
+	}
+}
+void pipeBrokenSafe()
+{
+	if(motorStatus)
+	{
+		if(flag_BrokenPipeVerify)
+		{
+			if(PRess<minPRess)
+			{
+				turnAll_OFF();
+				Serial1.println("PRessure Down!");
+			}
+		}
+	}
+
+}
+void pSafe()
+{
+	if(motorStatus)
+	{
+		if(PRess>=70)
+		{
+			turnAll_OFF();
+			Serial1.println("PRessure HIGH!");
+		}
+	}
+}
 
 uint8_t valveInstrSafe(uint8_t sectorPrivate, uint8_t instruction)
 {
@@ -1594,6 +1741,8 @@ uint8_t valveInstrSafe(uint8_t sectorPrivate, uint8_t instruction)
 	_delay_ms(100);
 
 	Im0 = (int) (1000.0*(Ia0+Ib0+Ic0)/3.0);
+	Serial1.print("Im0= ");
+	Serial1.print(Im0);
 
 	// Set valve instruction
 	valveInstr(sectorPrivate, instruction);
@@ -1608,6 +1757,8 @@ uint8_t valveInstrSafe(uint8_t sectorPrivate, uint8_t instruction)
 	_delay_ms(100);
 
 	Im1 = (int) (1000.0*(Ia1+Ib1+Ic1)/3.0);
+	Serial1.print("  Im1= ");
+	Serial1.println(Im1);
 
 	if(instruction)
 	{
@@ -1715,6 +1866,7 @@ void verifyValve()
 			sprintf(buffer,"Sistema desligado durante o setor[%.2d]!",stateSector);
 			SIM900_sendSMS(buffer);
 			turnAll_OFF();
+			Serial1.println("Im sensor Down!");
 			stateMode = manual;
 		}
 	}
@@ -1951,6 +2103,7 @@ void process_Programmed()
 		if(motorStatus)
 		{
 			turnAll_OFF();
+			Serial1.println("Red Period!");
 		}
 	}
 }
@@ -2026,8 +2179,6 @@ void refreshVariables()
 
 	thermalSafe();
 
-	valveOpenedVerify();
-
 	if(flag_reset)
 	{
 		wdt_enable(WDTO_15MS);
@@ -2038,7 +2189,19 @@ void refreshVariables()
 	{
 		flag_5min = 0;
 		count_5min = 300;
+
 		tempNow = getAirTemperature();
+	}
+
+	if(flag_3min)
+	{
+		flag_3min = 0;
+		count_3min = 180;
+
+		if(motorStatus)
+		{
+			flag_BrokenPipeVerify = 1;
+		}
 	}
 
 	if(flag_30s)
@@ -2051,6 +2214,14 @@ void refreshVariables()
 	if (flag_1s)
 	{
 		flag_1s = 0;
+
+		PRess = get_Pressure();
+		get_reservoirLevel();
+
+		pSafe();				// Verify maximum pressure;
+		levelSafe();			// verify reservoir bottom level;
+		valveOpenedVerify();	// AND op with all output valves;
+		pipeBrokenSafe();
 
 		RTC.read(tm);
 		periodVerify0();
@@ -2202,6 +2373,11 @@ void comm_SIM900()
 			Serial.println("SIM900 Check Alive TIMEOUT!");
 
 			SIM900_power();
+			if((minute()*60 + second())<90)
+			{
+				sprintf(buffer,"- Vassal Controller Started! -");
+				SIM900_sendSMS(buffer);
+			}
 		}
 	}
 
@@ -2575,9 +2751,23 @@ $8;				Reinicializa o display GLCD do painel;
 					sectorChanged = valveInstrSafe(sector, sectorCommand);
 					if(sectorChanged)
 					{
-						valveInstr(sectorCurrently, 0);
-						sectorCurrently = sector;
+						if(sectorCommand)
+						{
+							valveInstr(stateSector, 0);
+							stateSector = sector;
+							flag_BrokenPipeVerify = 0;
+							flag_3min = 0;
+							count_3min = 180;
+						}
+						else
+						{
+							stateSector = 0;
+						}
 					}
+//						valveInstr(stateSector, 0);
+//						stateSector = sector;
+//						valveInstr(sectorCurrently, 0);
+//						sectorCurrently = sector;
 
 					summary_Print(4);
 				}
@@ -2801,17 +2991,21 @@ void summary_GLCD()
 		GLCD.CursorTo(0,0);
 		GLCD.print(buffer);
 
-		sprintf(buffer,"Mode: %d     Per.:%d",stateMode, flag_timeMatch);
+		sprintf(buffer,"Mode: %d     Per.:%d   %4d:%d",stateMode, flag_timeMatch, levelSensor_d, levelSensor);
 		GLCD.CursorTo(0,2);
 		GLCD.print(buffer);
 
-		sprintf(buffer,"Setor%.2d: %.4d",stateSector, timeSector);
+//		sprintf(buffer,"Pd: %d",Pdig);
+//		GLCD.CursorTo(17,2);
+//		GLCD.print(buffer);
+
+		sprintf(buffer,"Setor%.2d: %.4d     Pr: %3.d m.c.a.", stateSector, timeSector, PRess);
 		GLCD.CursorTo(0,3);
 		GLCD.print(buffer);
 
 		int I=(int) (1000.0*calcIrms());
 		sprintf(buffer,"Is= %4.d mA",I);
-		GLCD.CursorTo(20,4);
+		GLCD.CursorTo(17,4);
 		GLCD.print(buffer);
 
 		sprintf(buffer,"RAM: %d",freeMemory());
@@ -2842,6 +3036,11 @@ ISR(TIMER1_COMPA_vect)
 		else
 			count_30s++;
 	}
+
+	if(!count_3min)
+		flag_3min = 1;
+	else
+		count_3min--;
 
 	if(!count_5min)
 		flag_5min = 1;
