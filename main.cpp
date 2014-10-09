@@ -33,6 +33,16 @@ PD0 --> SDL DS1307
 PD3 --> TX1 BT
 PD2 --> RX1 BT
 
+Errors:
+
+0x01: AND OP: no valves opened!
+0x02: Thermal safe!
+0x03: Reservoir Level Down!
+0x04: PRessure DOWN!
+0x05: PRessure HIGH!
+0x06: Sistema desligado durante o setor (broken wire)
+0x07: Joined into red period
+
 */
 
 #include <avr/io.h>
@@ -170,6 +180,8 @@ volatile uint16_t timeSector = 0;
 uint8_t timeSectorVectorMin[11];
 uint8_t celPhoneNumber[11];
 uint8_t flag_1s = 0;
+
+uint8_t lastError = 0;
 
 uint8_t valveOnTest = 0;
 uint8_t onlyValve = 0;
@@ -1041,6 +1053,12 @@ void motor_stop()
 }
 void valveInstr(uint8_t sectorPrivate, uint8_t status)
 {
+	// These flags comes here because when you change sector the pressure go down.
+	// With this, you disable the pressure turn system down verify.
+	flag_BrokenPipeVerify = 0;
+	flag_3min = 0;
+	count_3min = 180;
+
 	switch (sectorPrivate)
 	{
 		case 1:
@@ -1598,6 +1616,20 @@ void summary_Print(uint8_t opt)
 
 			break;
 
+		case 9:
+			sprintf(buffer,"Turn Down! Error: %d ", lastError);
+			if(enableSIM900_Send)
+			{
+				enableSIM900_Send = 0;
+				SIM900_sendSMS(buffer);
+			}
+			else
+			{
+				Serial1.println(buffer);
+			}
+
+			break;
+
 //		case 9:
 //			sprintf(buffer,"Error 09!");
 //			if(enableSIM900_Send)
@@ -1650,6 +1682,9 @@ void valveOpenedVerify()
 		{
 			turnAll_OFF();
 			Serial1.println("AND OP: no valves opened!");
+			lastError = 0x01;
+			enableSIM900_Send = 1;
+			summary_Print(7);
 		}
 	}
 }
@@ -1672,6 +1707,9 @@ void thermalSafe()
 				flag_Th = 1;
 				turnAll_OFF();
 				Serial1.println("Thermal Safe executed!");
+				lastError = 0x02;
+				enableSIM900_Send = 1;
+				summary_Print(7);
 
 				strcpy(buffer,"Rele Sobrecarga!");
 				SIM900_sendSMS(buffer);
@@ -1694,6 +1732,9 @@ void levelSafe()
 		{
 			turnAll_OFF();
 			Serial1.println("Reservoir Level Down!");
+			lastError = 0x03;
+			enableSIM900_Send = 1;
+			summary_Print(7);
 		}
 	}
 }
@@ -1707,6 +1748,9 @@ void pipeBrokenSafe()
 			{
 				turnAll_OFF();
 				Serial1.println("PRessure Down!");
+				lastError = 0x04;
+				enableSIM900_Send = 1;
+				summary_Print(7);
 			}
 		}
 	}
@@ -1720,6 +1764,9 @@ void pSafe()
 		{
 			turnAll_OFF();
 			Serial1.println("PRessure HIGH!");
+			lastError = 0x05;
+			enableSIM900_Send = 1;
+			summary_Print(7);
 		}
 	}
 }
@@ -1863,11 +1910,16 @@ void verifyValve()
 
 		if(Im<45)
 		{
+			stateMode = manual;
+
 			sprintf(buffer,"Sistema desligado durante o setor[%.2d]!",stateSector);
 			SIM900_sendSMS(buffer);
 			turnAll_OFF();
 			Serial1.println("Im sensor Down!");
-			stateMode = manual;
+
+			lastError = 0x06;
+			enableSIM900_Send = 1;
+			summary_Print(7);
 		}
 	}
 }
@@ -1950,6 +2002,7 @@ uint8_t verifyNextValve(uint8_t sectorPrivate)
 			valveInstr(sectorPrivate-1,0);	// Desliga atual
 			valveInstr(sectorPrivate,0);		// Desliga o que ligou
 			turnAll_OFF();
+			lastError = 0x00;
 
 			sprintf(buffer,"Time: %.2d:%.2d:%.2d, %.2d/%.2d/%d \n Sistema Desligado!",tm.Hour, tm.Minute, tm.Second, tm.Day, tm.Month, tmYearToCalendar(tm.Year));
 			SIM900_sendSMS(buffer);
@@ -1999,7 +2052,9 @@ void process_OnlyOneSector()
 		flag_timeOVF = 0;
 
 		turnAll_OFF();
+		lastError = 0x00;
 		timeSector = 10;		// Para nao gerar interrupcao e voltar aqui de novo pulando setor
+
 
 		sprintf(buffer,"Time: %.2d:%.2d:%.2d, %.2d/%.2d/%d \n Sistema Desligado!",tm.Hour, tm.Minute, tm.Second, tm.Day, tm.Month, tmYearToCalendar(tm.Year));
 		SIM900_sendSMS(buffer);
@@ -2104,6 +2159,10 @@ void process_Programmed()
 		{
 			turnAll_OFF();
 			Serial1.println("Red Period!");
+
+			lastError = 0x07;
+			enableSIM900_Send = 1;
+			summary_Print(7);
 		}
 	}
 }
@@ -2755,7 +2814,6 @@ $8;				Reinicializa o display GLCD do painel;
 						{
 							valveInstr(stateSector, 0);
 							stateSector = sector;
-							flag_BrokenPipeVerify = 0;
 							flag_3min = 0;
 							count_3min = 180;
 						}
