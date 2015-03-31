@@ -23,10 +23,10 @@ PH3 --> k1_read
 PE3 --> k3_read
 PH4 --> Th_read
 
-PF0 --> (A0) ADC Irms
-PF1 --> (A1) ADC Vrms
+PF0 --> (A0) Damage!!!
+PF1 --> (A1) ADC Irms
 PF2	-->	(A2) ADC Pressure Sensor
-PF3 -->	(A3) ADC Reservoir Level
+PF3 -->	(A3) ADC Reservoir Level (useful)
 PD1 --> SDA DS1307
 PD0 --> SDL DS1307
 
@@ -135,6 +135,12 @@ OneWire ds(46);
 //#define Th_read	bit_is_clear(PINH, 4)
 //bit_is_set(PIND, 3)
 
+// Wake up interrupts
+uint8_t flag_WDRF = 0;			// Watchdog System Reset Flag
+uint8_t flag_BORF = 0;			// Brown-out Reset Flag
+uint8_t flag_EXTRF = 0;			// External Reset Flag
+uint8_t flag_PORF = 0;			// Power-on Reset Flag
+
 const char *monthName[12] = {
 	"Jan", "Feb", "Mar", "Apr", "May", "Jun",
 	"Jul", "Aug", "Sep", "Oct", "Nov", "Dec"
@@ -180,6 +186,7 @@ volatile uint16_t timeSector = 0;
 uint8_t timeSectorVectorMin[11];
 uint8_t celPhoneNumber[11];
 uint8_t flag_1s = 0;
+uint8_t flag_sendContinuously = 0;
 
 uint8_t lastError = 0;
 
@@ -354,29 +361,34 @@ void init_ADC()
 {
 //	ADCSRA ==> ADEN ADSC ADATE ADIF ADIE ADPS2 ADPS1 ADPS0
 	ADCSRA |= (1<<ADPS2) | (1<<ADPS1) | (1<<ADPS0);	// Set 128 division clock
-	ADCSRA |= (1<<ADEN); 							// Enable module
+	ADCSRA |= (1<<ADEN); 				// Enable module
 
 //	ADCSRB ==>	–	ACME	–	–	MUX5	ADTS2	ADTS1	ADTS0
-	ADCSRB &= ~(1<<ADTS2);							// Free running mode.
+	ADCSRB &= ~(1<<ADTS2);				// Free running mode.
 	ADCSRB &= ~(1<<ADTS1);
 	ADCSRB &= ~(1<<ADTS0);
 
-	ADCSRB &= ~(1<<MUX5);							// To select ADC0;
+	ADCSRB &= ~(1<<MUX5);				// To select ADC0;
 
 //	ADMUX ==> REFS1 REFS0 ADLAR MUX4 MUX3 MUX2 MUX1 MUX0
-	ADMUX &= ~(1<<REFS1);							// AVCC is the Vref
+//	ADMUX &= ~(1<<REFS1);				// AREF, Internal Vref turned off
+//	ADMUX &= ~(1<<REFS0);
+	ADMUX &= ~(1<<REFS1);				// AVCC with external capacitor at AREF pin
 	ADMUX |=  (1<<REFS0);
-
-//	ADMUX |=  (1<<REFS0);							// Internal 2.56V reference
+//	ADMUX |=  (1<<REFS1);				// Internal 1.1V Voltage Reference with external capacitor at AREF pin
+//	ADMUX &= ~(1<<REFS0);
+//	ADMUX |=  (1<<REFS0);				// Internal 2.56V reference
 //	ADMUX |=  (1<<REFS1);
 
-	ADMUX &= ~(1<<ADLAR);							// Left Adjustment. To ADCH register.
-
-	ADMUX &= ~(1<<MUX4);							// Select ADC0
+//	ADMUX |=  (1<<ADLAR);				// Left Adjustment. To ADCH register.
+//										// Using 8 bits. Get ADCH only.
+	ADMUX &= ~(1<<ADLAR);				// Right Adjustment. To ADCL register.
+										// Using 10 bits
+	ADMUX &= ~(1<<MUX4);				// Select ADC1
 	ADMUX &= ~(1<<MUX3);
 	ADMUX &= ~(1<<MUX2);
 	ADMUX &= ~(1<<MUX1);
-	ADMUX &= ~(1<<MUX0);
+	ADMUX |=  (1<<MUX0);
 }
 void init_WDT()
 {
@@ -419,7 +431,7 @@ void get_reservoirLevel()
 	uint16_t value;
 	const uint16_t reference = 800;
 
-	// Select ADC0 - LL sensor
+	// Select ADC3 - LL sensor
 	ADMUX |=  (1<<MUX1);				// Select ADC3
 	ADMUX |=  (1<<MUX0);
 
@@ -613,8 +625,12 @@ float calcIrms()//uint8_t channel)//, uint8_t numberOfCycles)
 	uint8_t high, low;
 	int divScale_count = 1;
 
-	ADMUX &= ~(1<<MUX1);							// Select ADC0
-	ADMUX &= ~(1<<MUX0);
+	ADCSRB &= ~(1<<MUX5);
+	ADMUX  &= ~(1<<MUX4);
+	ADMUX  &= ~(1<<MUX3);
+	ADMUX  &= ~(1<<MUX2);
+	ADMUX  &= ~(1<<MUX1);
+	ADMUX  |=  (1<<MUX0);									// Select ADC1
 
 	// ADC converter
 	const float f = 60.0;									// Hertz;
@@ -1577,7 +1593,7 @@ void summary_Print(uint8_t opt)
 			break;
 
 		case 4:
-			sprintf(buffer,"Sector%.2d:%d, changed: %d, Time: %.2d:%.2d:%.2d,",sector,valveStatus[sector-1], sectorChanged, tm.Hour, tm.Minute, tm.Second);
+			sprintf(buffer,"Time: %.2d:%.2d:%.2d, Temp: %d",tm.Hour, tm.Minute, tm.Second, (int) (tempNow*10));
 			if(enableSIM900_Send)
 			{
 				enableSIM900_Send = 0;
@@ -1590,7 +1606,7 @@ void summary_Print(uint8_t opt)
 			break;
 
 		case 5:
-			sprintf(buffer,"Time: %.2d:%.2d:%.2d, Temp: %d",tm.Hour, tm.Minute, tm.Second, (int) (tempNow*10));
+			sprintf(buffer,"WDRF: %d, BORF: %d, EXTRF: %d, PORF: %d", flag_WDRF, flag_BORF, flag_EXTRF, flag_PORF);
 			if(enableSIM900_Send)
 			{
 				enableSIM900_Send = 0;
@@ -1613,8 +1629,21 @@ void summary_Print(uint8_t opt)
 			{
 				Serial1.println(buffer);
 			}
-
 			break;
+
+		case 7:
+			sprintf(buffer,"Sector%.2d:%d, changed: %d, Time: %.2d:%.2d:%.2d,",sector,valveStatus[sector-1], sectorChanged, tm.Hour, tm.Minute, tm.Second);
+			if(enableSIM900_Send)
+			{
+				enableSIM900_Send = 0;
+				SIM900_sendSMS(buffer);
+			}
+			else
+			{
+				Serial1.println(buffer);
+			}
+			break;
+
 
 		case 9:
 			sprintf(buffer,"Turn Down! Error: %d ", lastError);
@@ -1665,6 +1694,36 @@ void summary_Print(uint8_t opt)
 //				sprintf(buffer,"ts[%.d]: %d",i+1, timeSectorVectorMin[i]);
 //				Serial1.println(buffer);
 //			}
+			break;
+	}
+}
+void summary_Bluetooth(uint8_t muxSensor)
+{
+	int I, v;
+	uint8_t high, low;
+	switch (muxSensor)
+	{
+		case 1:
+
+			I =1000.0*calcIrms();
+			sprintf(buffer,"Is= %4.d mA",I);
+			Serial1.println(buffer);
+			break;
+
+		case 2:
+			ADCSRA |= (1<<ADSC);				// Start conversion;
+			while (bit_is_set(ADCSRA, ADSC));	// wait until conversion done;
+
+
+			low  = ADCL;
+			high = ADCH;
+
+			v = ((high << 8) | low);
+			Serial1.print("ADC: ");
+			Serial1.println(v);
+			break;
+
+		default:
 			break;
 	}
 }
@@ -2236,13 +2295,8 @@ void refreshVariables()
 //	GLCD.CursorTo(0,7);
 //	GLCD.print(buffer);
 
-	thermalSafe();
-
-	if(flag_reset)
-	{
-		wdt_enable(WDTO_15MS);
-		_delay_ms(100);
-	}
+	if(motorStatus)
+		thermalSafe();
 
 	if(flag_5min)
 	{
@@ -2275,15 +2329,24 @@ void refreshVariables()
 		flag_1s = 0;
 
 		PRess = get_Pressure();
-		get_reservoirLevel();
+//		get_reservoirLevel();	// Get ADC reservoir low level;
 
-		pSafe();				// Verify maximum pressure;
-		levelSafe();			// verify reservoir bottom level;
-		valveOpenedVerify();	// AND op with all output valves;
-		pipeBrokenSafe();
+		if(motorStatus)
+		{
+			pSafe();				// Verify maximum pressure;
+	//		levelSafe();			// verify reservoir bottom level;
+			valveOpenedVerify();	// AND op with all output valves;
+			pipeBrokenSafe();		// Verify pipe low pressure;
+		}
 
-		RTC.read(tm);
-		periodVerify0();
+		RTC.read(tm);			// RTC fetch;
+		periodVerify0();		// Period time refresh;
+
+		if(flag_sendContinuously)
+		{
+			summary_Bluetooth(2);
+		}
+
 	}
 }
 void refreshTimeSectors()
@@ -2298,6 +2361,7 @@ void refreshCelPhoneNumber()
 	uint8_t flag_Error01 = 0;
 	for(i=0;i<11;i++)
 	{
+		// Verify is there is any digit bigger the 9
 		if(eeprom_read_byte((uint8_t *)(i+addr_celNumber))>9)
 		{
 			flag_Error01 = 1;
@@ -2314,13 +2378,91 @@ void refreshCelPhoneNumber()
 	}
 	else
 	{
-		strcpy(celPhoneNumber_str,"27988087504");
-		sprintf(buffer,"CEL Error!");
+		strcpy(celPhoneNumber_str,"27988081875");
+		sprintf(buffer,"Restore Cel N. Error!");
 		SIM900_sendSMS(buffer);
-		Serial1.println("Error!");
+		Serial1.println("Restore Cel N. Error!");
 	}
 }
 
+void comm_Bluetooth()
+{
+	// Rx - Always listening
+//	uint8_t j2 =0;
+	while((Serial1.available()>0))	// Reading from serial
+	{
+		inChar = Serial1.read();
+
+		if(inChar=='$')
+		{
+			j2 = 0;
+			flag_frameStartBT = 1;
+//			Serial1.println("Frame Start!");
+		}
+
+		if(flag_frameStartBT)
+			sInstrBluetooth[j2] = inChar;
+
+//		sprintf(buffer,"J= %d",j2);
+//		Serial1.println(buffer);
+
+		j2++;
+
+		if(j2>=sizeof(sInstrBluetooth))
+		{
+			memset(sInstrBluetooth,0,sizeof(sInstrBluetooth));
+			j2=0;
+			Serial1.println("ZEROU! sIntr BLuetooth Buffer!");
+		}
+
+		if(inChar==';')
+		{
+//			Serial1.println("Encontrou ; !");
+			if(flag_frameStartBT)
+			{
+//				Serial1.println("Frame Stop!");
+				flag_frameStartBT = 0;
+				rLength = j2;
+				j2 = 0;
+				enableTranslate_Bluetooth = 1;
+			}
+		}
+	}
+//	flag_frameStart = 0;
+
+	if(enableTranslate_Bluetooth)
+	{
+//		Serial1.println("enableTranslate_Bluetooth");
+		enableTranslate_Bluetooth = 0;
+
+		char *pi0, *pf0;
+		pi0 = strchr(sInstrBluetooth,'$');
+		pf0 = strchr(sInstrBluetooth,';');
+
+		if(pi0!=NULL)
+		{
+			uint8_t l0=0;
+			l0 = pf0 - pi0;
+
+			int i;
+			for(i=1;i<=l0;i++)
+			{
+				sInstr[i-1] = pi0[i];
+//				Serial1.write(sInstr[i-1]);
+			}
+			memset(sInstrBluetooth,0,sizeof(sInstrBluetooth));
+	//		Serial.println(sInstr);
+
+			enableDecode = 1;
+		}
+		else
+		{
+			Serial1.println("Error BT!!");
+			Serial1.write(pi0[0]);
+			Serial1.write(pf0[0]);
+		}
+	}
+}
 void comm_SIM900()
 {
 	// Rx - Always listening
@@ -2460,6 +2602,10 @@ void comm_SIM900()
 //		}
 //	}
 }
+void comm_SerialPC()
+{
+
+}
 void comm_SIM900_SerialPC()
 {
 	// SIM900 to PC
@@ -2478,83 +2624,13 @@ void comm_SIM900_Bluetooth()
 	while(Serial1.available() > 0)
 		Serial2.write(Serial1.read());
 }
-void comm_Bluetooth()
+void comm_SerialPC_BluetoothMOD()
 {
-	// Rx - Always listening
-//	uint8_t j2 =0;
-	while((Serial1.available()>0))	// Reading from serial
-	{
-		inChar = Serial1.read();
+	while(Serial.available() > 0)
+		Serial1.write(Serial.read());
 
-		if(inChar=='$')
-		{
-			j2 = 0;
-			flag_frameStartBT = 1;
-//			Serial1.println("Frame Start!");
-		}
-
-		if(flag_frameStartBT)
-			sInstrBluetooth[j2] = inChar;
-
-//		sprintf(buffer,"J= %d",j2);
-//		Serial1.println(buffer);
-
-		j2++;
-
-		if(j2>=sizeof(sInstrBluetooth))
-		{
-			memset(sInstrBluetooth,0,sizeof(sInstrBluetooth));
-			j2=0;
-			Serial1.println("ZEROU! sIntr BLuetooth Buffer!");
-		}
-
-		if(inChar==';')
-		{
-//			Serial1.println("Encontrou ; !");
-			if(flag_frameStartBT)
-			{
-//				Serial1.println("Frame Stop!");
-				flag_frameStartBT = 0;
-				rLength = j2;
-				j2 = 0;
-				enableTranslate_Bluetooth = 1;
-			}
-		}
-	}
-//	flag_frameStart = 0;
-
-	if(enableTranslate_Bluetooth)
-	{
-//		Serial1.println("enableTranslate_Bluetooth");
-		enableTranslate_Bluetooth = 0;
-
-		char *pi0, *pf0;
-		pi0 = strchr(sInstrBluetooth,'$');
-		pf0 = strchr(sInstrBluetooth,';');
-
-		if(pi0!=NULL)
-		{
-			uint8_t l0=0;
-			l0 = pf0 - pi0;
-
-			int i;
-			for(i=1;i<=l0;i++)
-			{
-				sInstr[i-1] = pi0[i];
-//				Serial1.write(sInstr[i-1]);
-			}
-			memset(sInstrBluetooth,0,sizeof(sInstrBluetooth));
-	//		Serial.println(sInstr);
-
-			enableDecode = 1;
-		}
-		else
-		{
-			Serial1.println("Error BT!!");
-			Serial1.write(pi0[0]);
-			Serial1.write(pf0[0]);
-		}
-	}
+	while(Serial1.available() > 0)
+		Serial.write(Serial1.read());
 }
 
 void handleMessage()
@@ -2567,12 +2643,15 @@ Fim do comando sempre com ponto vírgula ;
 
 $0X;				Verificar detalhes - Detalhes simples (tempo).
 	$00;			- Mostra o tempo ajustado de todos setores.
+		$00:0;		- flag_sendContinuously = 0
+		$00:1;		- flag_sendContinuously = 1
 	$01;			- Mostra a relação de quais válvulas estão ligadas ou desligadas;
 	$02;			- Número do telefone que manda o SMS de retorno;
 	$03;			- Variáveis do motor;
-	$04;			- Não implementado;
-	$05;			- Verifica a temperatura instantânea do ambiente;
-		$05:04;		- Verifica a temperatura média dos últimos 04 dias.
+	$04;			- Verifica a temperatura instantânea do ambiente;
+		$04:04;		- Verifica a temperatura média dos últimos 04 dias.
+	$05;			- Motivo da reinicialização;
+	$06;			- Mostra setor atual, tempo restante e período de operação;
 	$07;			- Liga/Desliga o SIM900;
 	$08;			- Reseta SIM900;
 	$09;			- Reinicia o sistema.
@@ -2642,6 +2721,7 @@ $8;				Reinicializa o display GLCD do painel;
 
 		switch (opcode)
 		{
+// --------------------------------------------------------------------------------------
 			case 0:		// Check status
 			{
 				aux[0] = '0';
@@ -2659,15 +2739,17 @@ $8;				Reinicializa o display GLCD do painel;
 							Serial1.println("SIM900 Power!");
 						break;
 
-						case 8:
+						case 8:	// Reset SIM900
 							SIM900_reset();
 							flag_SIM900_checkAlive = 0;
 							flag_SIM900_died = 0;
 							count_30s = 0;
 							break;
 
-						case 9:
-							flag_reset = 1;
+						case 9:	// Reset system
+								Serial1.println("Rebooting system...");
+								wdt_enable(WDTO_15MS);
+								_delay_ms(100);
 							break;
 
 						default:
@@ -2675,26 +2757,26 @@ $8;				Reinicializa o display GLCD do painel;
 							break;
 					}
 				}
+				else if(sInstr[2] == ':' && (statusCommand == 0))
+				{
+					if(sInstr[4] == ';')
+					{
+						aux[0] = '0';
+						aux[1] = sInstr[3];
+						aux[2] = '\0';
+						uint8_t subCommand = (uint8_t) atoi(aux);
+
+						if(!subCommand)
+							flag_sendContinuously = 0;
+						else
+							flag_sendContinuously = 1;
+
+					}
+				}
 			}
-				break;
+			break;
 
-//				if(sInstr[1] == ';')
-//				{
-//					summary_Print(0);
-//				}
-//				else
-//				{
-//					aux[0] = '0';
-//					aux[1] = sInstr[1];
-//					aux[2] = '\0';
-//					uint8_t statusCommand = (uint8_t) atoi(aux);
-//
-//					summary_Print(statusCommand);
-//				}
-//
-//				break;
-
-// -----------------------------------------------------------------
+// --------------------------------------------------------------------------------------
 			case 1:		// Set-up clock
 			{
 				// Getting the parameters
@@ -2788,15 +2870,13 @@ $8;				Reinicializa o display GLCD do painel;
 
 				if(sInstr[1] == 's')
 				{
-					aux[0] = sInstr[2];
+					aux[0] = sInstr[2];				// Get sector number
 					aux[1] = sInstr[3];
 					aux[2] = '\0';
 					sector = (uint8_t) atoi(aux);
 
-//					uint8_t sectorCommand;
-					// sInstr[4] == :
 					aux[0] = '0';
-					aux[1] = sInstr[5];
+					aux[1] = sInstr[5];				// Get status, 1-ON or 0-OFF
 					aux[2] = '\0';
 					sectorCommand = (uint8_t) atoi(aux);
 
@@ -2827,7 +2907,7 @@ $8;				Reinicializa o display GLCD do painel;
 //						valveInstr(sectorCurrently, 0);
 //						sectorCurrently = sector;
 
-					summary_Print(4);
+					summary_Print(7);
 				}
 				break;
 
@@ -3114,11 +3194,54 @@ ISR(TIMER1_COMPA_vect)
 	flag_summaryGLCD = 1;
 }
 
-//#define saida (~PINB & 0b10000000)
+// Test functions
+void get_adc()
+{
+
+	ADCSRB &= ~(1<<MUX5);				// To select ADC0;
+
+	ADMUX &= ~(1<<MUX4);				// Select ADC0
+	ADMUX &= ~(1<<MUX3);
+	ADMUX &= ~(1<<MUX2);
+	ADMUX &= ~(1<<MUX1);
+	ADMUX |=  (1<<MUX0);
+
+	ADCSRA |= (1<<ADSC);				// Start conversion;
+	while (bit_is_set(ADCSRA, ADSC));	// wait until conversion done;
+
+	uint8_t low, high;
+	low  = ADCL;
+	high = ADCH;
+
+	int value = (high << 8) | low;
+
+	Serial1.println(value);
+	_delay_ms(200);
+
+
+//	return ((high << 8) | low);
+}
 
 int main()
 {
+	// PowerOFF / Reset verification
+//	flag_WDRF 	= (WDRF & MCUSR);
+//	flag_BORF 	= (BORF & MCUSR);
+//	flag_EXTRF 	= (EXTRF & MCUSR);
+//	flag_PORF 	= (PORF & MCUSR);
+
+	cli();
+	flag_WDRF =		(0b00001000 & MCUSR);
+	flag_BORF =		(0b00000100 & MCUSR);
+	flag_EXTRF =	(0b00000010 & MCUSR);
+	flag_PORF =		(0b00000001 & MCUSR);
+
+	MCUSR = 0x00;
+	sei();
+
+
 	// Initialize arduino hardware requirements.
+
 	init();
 	init_valves();
 	init_contactors();
@@ -3164,12 +3287,17 @@ int main()
 		wdt_reset();
 		handleMessage();
 
-		// GLD Screen Informations
-		wdt_reset();
-		summary_GLCD();
-
-
-//		// SIM900 <--> uC
-//		comm_SIM900_SerialPC();
+//		get_adc();
+//		// GLD Screen Informations
+//		wdt_reset();
+//		summary_GLCD();
 	}
+
+
+//	// Use only this while to setup bluetooth
+//	while(1)
+//	{
+//		wdt_reset();
+//		comm_SerialPC_BluetoothMOD();
+//	}
 }
